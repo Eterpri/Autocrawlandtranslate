@@ -1,12 +1,12 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { 
-  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info
+  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders
 } from 'lucide-react';
 import { FileItem, FileStatus, StoryProject, ReaderSettings } from './types';
-import { DEFAULT_PROMPT, MODEL_CONFIGS } from './constants';
+import { DEFAULT_PROMPT, MODEL_CONFIGS, AVAILABLE_LANGUAGES, AVAILABLE_GENRES, AVAILABLE_PERSONALITIES, AVAILABLE_SETTINGS, AVAILABLE_FLOWS, DEFAULT_DICTIONARY } from './constants';
 import { translateBatch, analyzeStoryContext } from './geminiService';
-import { createMergedFile, downloadTextFile, generateEpub, fetchContentFromUrl } from './utils/fileHelpers';
+import { createMergedFile, downloadTextFile, generateEpub, fetchContentFromUrl, unzipFiles } from './utils/fileHelpers';
 import { replacePromptVariables } from './utils/textHelpers';
 import { saveProject, getAllProjects, deleteProject } from './utils/storage';
 import { quotaManager } from './utils/quotaManager';
@@ -21,6 +21,14 @@ const BG_COLORS = [
     { name: 'Tối', code: 'bg-slate-900 text-slate-300' }
 ];
 
+const generateId = () => {
+    try {
+        return crypto.randomUUID();
+    } catch (e) {
+        return Date.now().toString(36) + Math.random().toString(36).substring(2);
+    }
+};
+
 const App: React.FC = () => {
   const [projects, setProjects] = useState<StoryProject[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
@@ -30,270 +38,264 @@ const App: React.FC = () => {
   const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
   const [showContextSetup, setShowContextSetup] = useState<boolean>(false);
   const [showSettings, setShowSettings] = useState<boolean>(false);
-  const [userApiKey, setUserApiKey] = useState<string>(localStorage.getItem('user_gemini_api_key') || '');
+  const [showNewProjectModal, setShowNewProjectModal] = useState<boolean>(false);
+  const [showTTSSettings, setShowTTSSettings] = useState<boolean>(false);
   
   const [linkInput, setLinkInput] = useState<string>("");
-  const [autoCrawl, setAutoCrawl] = useState<boolean>(false);
   const [crawlLimit, setCrawlLimit] = useState<number>(10);
+  const [isAutoCrawlEnabled, setIsAutoCrawlEnabled] = useState<boolean>(true);
   const [isFetchingLinks, setIsFetchingLinks] = useState<boolean>(false);
   const [fetchProgress, setFetchProgress] = useState<{current: number, total: number} | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [searchTerm, setSearchTerm] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [isContinuousFlow, setIsContinuousFlow] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
 
-  const stopCrawlRef = useRef<boolean>(false);
   const [viewingFileId, setViewingFileId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<{id: string, message: string, type: string}[]>([]);
 
-  const processingProjectIdRef = useRef<string | null>(null);
+  // TTS & Reader Refs
+  const readerScrollRef = useRef<HTMLDivElement>(null);
+  const activeLineRef = useRef<HTMLDivElement>(null);
+  const isReaderActiveRef = useRef<boolean>(false); // Cực kỳ quan trọng để chặn TTS chạy ngầm
+  const synthesisRef = useRef<SpeechSynthesis | null>(window.speechSynthesis);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [activeTTSIndex, setActiveTTSIndex] = useState<number>(-1);
+  const [isTTSPaused, setIsTTSPaused] = useState<boolean>(false);
+
   const currentProject = useMemo(() => projects.find(p => p.id === currentProjectId) || null, [projects, currentProjectId]);
 
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>({
-      fontSize: 18,
+      fontSize: 19,
       bgColor: 'bg-[#f4ecd8] text-slate-900',
       fontFamily: 'font-serif',
-      ttsRate: 1.0,
+      ttsRate: 1.2,
+      ttsVoice: '',
       showOriginal: false,
       isAutoScrollActive: true
   });
 
-  const [isTTSPlaying, setIsTTSPlaying] = useState<boolean>(false);
-  const [activeTTSIndex, setActiveTTSIndex] = useState<number>(-1);
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selectedVoiceName, setSelectedVoiceName] = useState<string | null>(null);
-  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const readerScrollRef = useRef<HTMLDivElement>(null);
+  const [newProjectInfo, setNewProjectInfo] = useState({
+      title: '', author: '', languages: ['Convert thô'], genres: ['Tiên Hiệp'], mcPersonality: ['Trầm ổn/Già dặn'], worldSetting: ['Trung Cổ/Cổ Đại'], sectFlow: ['Phàm nhân lưu']
+  });
 
-  // Sync API Key to Environment and Storage
+  // Load voices - Đảm bảo voice được cập nhật liên tục
   useEffect(() => {
-    if (userApiKey) {
-        localStorage.setItem('user_gemini_api_key', userApiKey);
-        // @ts-ignore
-        process.env.API_KEY = userApiKey;
-    }
-  }, [userApiKey]);
-
-  useEffect(() => {
-      if (isTTSPlaying && activeTTSIndex !== -1 && readerScrollRef.current && readerSettings.isAutoScrollActive) {
-          const activeElement = readerScrollRef.current.querySelector(`[data-index="${activeTTSIndex}"]`);
-          if (activeElement) {
-              activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-      }
-  }, [activeTTSIndex, isTTSPlaying, readerSettings.isAutoScrollActive]);
-
-  const [visibleOriginalIndices, setVisibleOriginalIndices] = useState<Set<number>>(new Set());
-
-  useEffect(() => {
-    const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      setAvailableVoices(voices);
-      if (voices.length > 0 && !selectedVoiceName) {
-          const viVoice = voices.find(v => v.lang.includes('vi')) || voices[0];
-          setSelectedVoiceName(viVoice.name);
-      }
+    const updateVoices = () => {
+        if (!window.speechSynthesis) return;
+        const voices = window.speechSynthesis.getVoices();
+        // Ưu tiên tiếng Việt (vi-VN) lên đầu danh sách
+        const sorted = voices.sort((a, b) => {
+            if (a.lang.startsWith('vi') && !b.lang.startsWith('vi')) return -1;
+            if (!a.lang.startsWith('vi') && b.lang.startsWith('vi')) return 1;
+            return 0;
+        });
+        setAvailableVoices(sorted.filter(v => v.lang.startsWith('vi') || v.lang.startsWith('en')));
     };
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-  }, [selectedVoiceName]);
+    updateVoices();
+    if (window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = updateVoices;
+    }
+  }, []);
 
   useEffect(() => {
     getAllProjects().then(setProjects);
   }, []);
 
-  useEffect(() => {
-    if (currentProject?.readerSettings) {
-        setReaderSettings(prev => ({...prev, ...currentProject.readerSettings}));
-    }
-  }, [currentProjectId]);
+  const addToast = useCallback((message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+    const id = generateId();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }, []);
+
+  const updateProject = (id: string, updates: Partial<StoryProject>) => {
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates, lastModified: Date.now() } : p));
+  };
 
   const persistProject = async (project: StoryProject) => {
     setIsSaving(true);
     try {
       await saveProject(project);
-    } catch (e) { console.error(e); } finally { setIsSaving(false); }
+    } catch (e) { 
+        console.error("Save failed", e);
+    } finally { 
+        setIsSaving(false); 
+    }
   };
 
   useEffect(() => {
     if (currentProject) persistProject(currentProject);
   }, [currentProject?.lastModified]);
 
-  const addToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
-    const id = crypto.randomUUID();
-    setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
-  };
-
-  const createNewProject = () => {
+  const createNewProject = async () => {
+    if (!newProjectInfo.title.trim()) return addToast("Tên truyện không được để trống", "warning");
+    const projectId = generateId();
     const newProject: StoryProject = {
-      id: crypto.randomUUID(),
-      info: { title: 'Truyện mới ' + (projects.length + 1), author: '', languages: ['Convert thô'], genres: ['Tiên Hiệp'], mcPersonality: [], worldSetting: [], sectFlow: [] },
+      id: projectId,
+      info: { ...newProjectInfo, contextNotes: "" },
       chapters: [],
       promptTemplate: DEFAULT_PROMPT,
-      dictionary: '',
-      globalContext: '',
+      dictionary: DEFAULT_DICTIONARY,
+      globalContext: "",
       createdAt: Date.now(),
       lastModified: Date.now()
     };
-    setProjects(prev => [newProject, ...prev]);
-    setCurrentProjectId(newProject.id);
-    setIsSidebarOpen(false);
-  };
-
-  const updateProject = (id: string, updates: Partial<StoryProject>) => {
-    setProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates, lastModified: Date.now() } : p));
-  };
-
-  const handleLinkSubmit = async () => {
-    if (!currentProject) return;
-    const urls = linkInput.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
-    if (urls.length === 0) {
-        addToast("Vui lòng dán link truyện hợp lệ", "warning");
-        return;
+    try {
+        await saveProject(newProject);
+        setProjects(prev => [...prev, newProject]);
+        setCurrentProjectId(projectId);
+        setShowNewProjectModal(false);
+        setNewProjectInfo({
+            title: '', author: '', languages: ['Convert thô'], genres: ['Tiên Hiệp'], 
+            mcPersonality: ['Trầm ổn/Già dặn'], worldSetting: ['Trung Cổ/Cổ Đại'], sectFlow: ['Phàm nhân lưu']
+        });
+        addToast("Đã tạo truyện mới", "success");
+    } catch (e) {
+        addToast("Lỗi khi tạo truyện", "error");
     }
+  };
+
+  const handleDeleteProject = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Xác nhận xóa truyện này?")) return;
+    await deleteProject(id);
+    setProjects(prev => prev.filter(p => p.id !== id));
+    if (currentProjectId === id) setCurrentProjectId(null);
+    addToast("Đã xóa truyện", "info");
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!currentProject || !e.target.files?.length) return;
+    const files = e.target.files;
+    let newChapters: FileItem[] = [];
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+            if (file.name.endsWith('.zip')) {
+                const unzipped = await unzipFiles(file);
+                newChapters = [...newChapters, ...unzipped];
+            } else {
+                const content = await file.text();
+                newChapters.push({
+                    id: generateId(),
+                    name: file.name.replace('.txt', ''),
+                    content,
+                    translatedContent: null,
+                    status: FileStatus.IDLE,
+                    retryCount: 0,
+                    originalCharCount: content.length,
+                    remainingRawCharCount: 0
+                });
+            }
+        } catch (err) {
+            addToast(`Lỗi đọc file: ${file.name}`, "error");
+        }
+    }
+    updateProject(currentProject.id, { chapters: [...currentProject.chapters, ...newChapters] });
+    addToast(`Đã thêm ${newChapters.length} chương`, "success");
+  };
+
+  const handleLinkCrawl = async (limitOverride?: number) => {
+    if (!currentProject || (!linkInput && !currentProject.lastCrawlUrl)) return;
+    const startUrl = linkInput || currentProject.lastCrawlUrl;
+    if (!startUrl) return;
 
     setIsFetchingLinks(true);
-    stopCrawlRef.current = false;
-    let updatedChapters = [...currentProject.chapters];
-    let addedCount = 0;
+    setShowLinkModal(false);
+    let currentUrl = startUrl;
+    let count = 0;
+    const targetLimit = limitOverride || crawlLimit;
     
     try {
-      let currentUrl: string | null = urls[0];
-      setFetchProgress({ current: 0, total: crawlLimit });
-      
-      for (let i = 0; i < crawlLimit; i++) {
-          if (!currentUrl || stopCrawlRef.current) break;
-          
-          try {
-            const { title, content, nextUrl } = await fetchContentFromUrl(currentUrl);
-            if (!updatedChapters.some(c => c.name === title)) {
-                updatedChapters.push({ 
-                    id: crypto.randomUUID(), 
-                    name: title, 
-                    content, 
-                    translatedContent: null, 
-                    status: FileStatus.IDLE, 
-                    retryCount: 0, 
-                    originalCharCount: content.length, 
-                    remainingRawCharCount: 0 
-                });
-                addedCount++;
-            }
-            setFetchProgress({ current: i + 1, total: crawlLimit });
-            currentUrl = nextUrl;
-            updateProject(currentProject.id, { 
-                chapters: [...updatedChapters], 
-                lastCrawlUrl: currentUrl || undefined 
-            });
-            await new Promise(r => setTimeout(r, 1200));
-          } catch (fetchErr: any) {
-              if (autoCrawl) break;
-          }
-      }
-      if (addedCount > 0) addToast(`Đã cào thêm ${addedCount} chương`, "success");
-    } catch (e: any) { 
-        addToast(e.message, 'error'); 
-    } finally { 
-        setIsFetchingLinks(false); 
-        setFetchProgress(null); 
-        setShowLinkModal(false); 
+        while (currentUrl && count < targetLimit) {
+            setFetchProgress({ current: count + 1, total: targetLimit });
+            const result = await fetchContentFromUrl(currentUrl);
+            const newChapter: FileItem = {
+                id: generateId(),
+                name: result.title,
+                content: result.content,
+                translatedContent: null,
+                status: FileStatus.IDLE,
+                retryCount: 0,
+                originalCharCount: result.content.length,
+                remainingRawCharCount: 0
+            };
+            
+            setProjects(prev => prev.map(p => p.id === currentProject.id ? { 
+                ...p, 
+                chapters: [...p.chapters, newChapter], 
+                lastCrawlUrl: result.nextUrl || currentUrl 
+            } : p));
+            
+            currentUrl = result.nextUrl || "";
+            count++;
+            if (!currentUrl) break;
+            await new Promise(r => setTimeout(r, 1500)); 
+        }
+        if (count > 0) addToast(`Cào xong ${count} chương`, "success");
+    } catch (e: any) {
+        addToast("Lỗi cào link: " + e.message, "error");
+    } finally {
+        setIsFetchingLinks(false);
+        setFetchProgress(null);
         setLinkInput("");
     }
   };
 
-  const deleteChapter = (chapterId: string) => {
-    if (!currentProject) return;
-    const updatedChapters = currentProject.chapters.filter(c => c.id !== chapterId);
-    updateProject(currentProject.id, { chapters: updatedChapters });
-  };
-
-  const handleStartTranslateRequest = () => {
-      if (!userApiKey) {
-          addToast("Vui lòng cấu hình API Key trong phần Cài đặt trước khi dịch", "error");
-          setShowSettings(true);
-          return;
-      }
-      if (!currentProject) return;
-      if (!currentProject.globalContext || currentProject.globalContext.length < 50) {
-          setShowContextSetup(true);
-      } else {
-          startTranslation(false);
-      }
-  };
-
-  const startTranslation = (continuous: boolean = false) => {
-    if (!currentProject) return;
-    const idleChapters = currentProject.chapters
-        .filter(c => c.status === FileStatus.IDLE || c.status === FileStatus.ERROR)
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    if (idleChapters.length === 0) {
-        addToast("Không còn chương nào cần dịch", "info");
-        return;
-    }
-    setIsContinuousFlow(continuous);
-    processingProjectIdRef.current = currentProject.id;
-    setProcessingQueue(idleChapters.map(c => c.id));
-    setIsProcessing(true);
-  };
-
-  const stopTranslation = () => {
-      setIsProcessing(false);
-      setIsContinuousFlow(false);
-      setProcessingQueue([]);
-      processingProjectIdRef.current = null;
-  };
-
-  const handleExport = async (format: 'epub' | 'txt') => {
-    if (!currentProject) return;
-    const completedChapters = currentProject.chapters.filter(c => c.status === FileStatus.COMPLETED);
-    if (completedChapters.length === 0) {
-        addToast("Chưa có chương nào dịch xong để xuất", "warning");
-        return;
-    }
-    try {
-      if (format === 'epub') {
-        const blob = await generateEpub(currentProject.chapters, currentProject.info, null);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = `${currentProject.info.title}.epub`; a.click();
-      } else {
-        const content = createMergedFile(currentProject.chapters);
-        downloadTextFile(`${currentProject.info.title}.txt`, content);
-      }
-    } catch (e: any) { addToast(e.message, 'error'); }
-  };
-
   const handleAnalyzeContext = async () => {
-      if (!userApiKey) {
-          addToast("Vui lòng cấu hình API Key trước", "error");
-          setShowSettings(true);
-          return;
-      }
-      if (!currentProject || isAnalyzing) return;
-      setIsAnalyzing(true);
-      try {
-          const context = await analyzeStoryContext(currentProject.chapters.slice(0, 10), currentProject.info);
-          updateProject(currentProject.id, { globalContext: context });
-          addToast("AI đã lập bối cảnh thành công", "success");
-      } catch (e: any) { addToast(e.message, 'error'); } finally { setIsAnalyzing(false); }
+    if (!currentProject || isAnalyzing) return;
+    if (currentProject.chapters.length === 0) return addToast("Cần chương để phân tích", "warning");
+    setIsAnalyzing(true);
+    try {
+        const context = await analyzeStoryContext(currentProject.chapters.slice(0, 10), currentProject.info);
+        updateProject(currentProject.id, { globalContext: context });
+        addToast("Phân tích xong bối cảnh", "success");
+    } catch (e: any) { 
+        addToast(e.message, 'error'); 
+    } finally { setIsAnalyzing(false); }
   };
+
+  const startTranslation = useCallback((retryAll: boolean = false) => {
+    if (!currentProject) return;
+    const toProcess = currentProject.chapters
+        .filter(c => retryAll ? true : (c.status === FileStatus.IDLE || c.status === FileStatus.ERROR))
+        .map(c => c.id);
+    if (toProcess.length === 0) return addToast("Không còn chương cần dịch", "info");
+    setProcessingQueue(prev => [...new Set([...prev, ...toProcess])]);
+    setIsProcessing(true);
+  }, [currentProject, addToast]);
+
+  const stopTranslation = useCallback(() => {
+    setIsProcessing(false);
+    setProcessingQueue([]);
+    addToast("Đã dừng dịch", "info");
+  }, [addToast]);
 
   useEffect(() => {
     if (!isProcessing || processingQueue.length === 0 || activeWorkers >= MAX_CONCURRENCY || !currentProjectId) return;
     const processBatch = async () => {
         const batchIds = processingQueue.slice(0, BATCH_FILE_LIMIT);
-        const targetProjectId = currentProjectId;
         setProcessingQueue(prev => prev.slice(BATCH_FILE_LIMIT));
         setActiveWorkers(prev => prev + 1);
-        setProjects(prev => prev.map(p => p.id === targetProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.PROCESSING } : c) } : p));
-        const targetProj = projects.find(p => p.id === targetProjectId);
-        if (!targetProj) { setActiveWorkers(prev => prev - 1); return; }
+        setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.PROCESSING } : c) } : p));
         try {
-            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)), replacePromptVariables(targetProj.promptTemplate, targetProj.info), targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id));
-            setProjects(prev => prev.map(p => p.id === targetProjectId ? { ...p, lastModified: Date.now(), chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: results.get(c.id) ? FileStatus.COMPLETED : FileStatus.ERROR, translatedContent: results.get(c.id) || null, usedModel: model } : c) } : p));
+            const targetProj = projects.find(p => p.id === currentProjectId);
+            if (!targetProj) throw new Error("No project");
+            const prompt = replacePromptVariables(targetProj.promptTemplate, targetProj.info);
+            const { results, model } = await translateBatch(
+                targetProj.chapters.filter(c => batchIds.includes(c.id)), 
+                prompt, targetProj.dictionary, targetProj.globalContext, 
+                MODEL_CONFIGS.map(m => m.id)
+            );
+            setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, lastModified: Date.now(), chapters: p.chapters.map(c => {
+                if (batchIds.includes(c.id)) {
+                    const translated = results.get(c.id);
+                    return { ...c, status: translated ? FileStatus.COMPLETED : FileStatus.ERROR, translatedContent: translated || null, usedModel: model };
+                }
+                return c;
+            }) } : p));
+            if (isAutoCrawlEnabled && batchIds.length >= 2) handleLinkCrawl(2); 
         } catch (e) {
-            setProjects(prev => prev.map(p => p.id === targetProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR } : c) } : p));
+            setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR } : c) } : p));
         } finally { setActiveWorkers(prev => prev - 1); }
     };
     processBatch();
@@ -304,359 +306,399 @@ const App: React.FC = () => {
     return [...currentProject.chapters].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }, [currentProject]);
 
-  // Define stats to fix the error and track project progress
-  const stats = useMemo(() => {
-    if (!currentProject) return { total: 0, done: 0 };
-    return {
-      total: currentProject.chapters.length,
-      done: currentProject.chapters.filter(c => c.status === FileStatus.COMPLETED).length
-    };
-  }, [currentProject]);
+  const viewingChapter = useMemo(() => sortedChapters.find(c => c.id === viewingFileId) || null, [sortedChapters, viewingFileId]);
 
-  const viewingChapter = useMemo(() => {
-    return sortedChapters.find(c => c.id === viewingFileId) || null;
-  }, [sortedChapters, viewingFileId]);
-
-  const handleNextChapter = useCallback(() => {
-    const currentIndex = sortedChapters.findIndex(c => c.id === viewingFileId);
-    if (currentIndex < sortedChapters.length - 1) {
-        setViewingFileId(sortedChapters[currentIndex + 1].id);
-        setVisibleOriginalIndices(new Set());
-        if (readerScrollRef.current) readerScrollRef.current.scrollTop = 0;
-        return true;
-    }
-    return false;
-  }, [sortedChapters, viewingFileId]);
-
-  const handlePrevChapter = useCallback(() => {
-    const currentIndex = sortedChapters.findIndex(c => c.id === viewingFileId);
-    if (currentIndex > 0) {
-        setViewingFileId(sortedChapters[currentIndex - 1].id);
-        setVisibleOriginalIndices(new Set());
-        if (readerScrollRef.current) readerScrollRef.current.scrollTop = 0;
-        return true;
-    }
-    return false;
-  }, [sortedChapters, viewingFileId]);
-
+  // TTS Stop - Reset triệt để
   const stopTTS = useCallback(() => {
-    window.speechSynthesis.cancel();
-    setIsTTSPlaying(false);
+    if (synthesisRef.current) {
+        synthesisRef.current.cancel();
+    }
     setActiveTTSIndex(-1);
-    currentUtteranceRef.current = null;
+    setIsTTSPaused(false);
   }, []);
 
-  const playTTS = useCallback((text: string) => {
-    if (!text) return;
-    stopTTS();
-    const chunks = text.split('\n').filter(line => line.trim().length > 0);
-    let currentChunkIndex = 0;
-    const speakChunk = () => {
-        if (currentChunkIndex >= chunks.length) {
-            if (!handleNextChapter()) stopTTS();
-            return;
-        }
-        setActiveTTSIndex(currentChunkIndex);
-        const utterance = new SpeechSynthesisUtterance(chunks[currentChunkIndex]);
-        const voice = availableVoices.find(v => v.name === selectedVoiceName);
-        if (voice) utterance.voice = voice;
-        utterance.rate = readerSettings.ttsRate || 1.0;
-        utterance.onend = () => { currentChunkIndex++; speakChunk(); };
-        utterance.onerror = () => stopTTS();
-        currentUtteranceRef.current = utterance;
-        window.speechSynthesis.speak(utterance);
-    };
-    setIsTTSPlaying(true);
-    speakChunk();
-  }, [availableVoices, selectedVoiceName, readerSettings.ttsRate, handleNextChapter, stopTTS]);
+  const playTTS = useCallback((startIndex: number = 0) => {
+    // CHẶN: Nếu trình đọc không còn active thì không làm gì cả
+    if (!isReaderActiveRef.current || !viewingChapter?.translatedContent) {
+        stopTTS();
+        return;
+    }
 
-  const toggleParagraphOriginal = (index: number) => {
-      if (!readerSettings.showOriginal) return;
-      setVisibleOriginalIndices(prev => {
-          const next = new Set(prev);
-          if (next.has(index)) next.delete(index);
-          else next.add(index);
-          return next;
-      });
+    // Luôn cancel cái cũ trước khi tạo Utterance mới
+    if (synthesisRef.current) {
+        synthesisRef.current.cancel();
+    }
+
+    const paragraphs = viewingChapter.translatedContent.split('\n').filter(p => p.trim().length > 0);
+    
+    // Xử lý hết chương
+    if (startIndex >= paragraphs.length) {
+        const currentIndex = sortedChapters.findIndex(c => c.id === viewingFileId);
+        if (currentIndex < sortedChapters.length - 1 && isReaderActiveRef.current) {
+            setViewingFileId(sortedChapters[currentIndex + 1].id);
+            addToast("Chuyển chương...", "info");
+            // Delay nhẹ để UI cập nhật chương mới rồi mới đọc
+            setTimeout(() => {
+                if (isReaderActiveRef.current) playTTS(0);
+            }, 800);
+        } else {
+            addToast("Đã đọc hết danh sách", "success");
+            stopTTS();
+        }
+        return;
+    }
+
+    const textToRead = paragraphs[startIndex].trim();
+    setActiveTTSIndex(startIndex);
+    
+    const utterance = new SpeechSynthesisUtterance(textToRead);
+    utterance.lang = 'vi-VN';
+    utterance.rate = readerSettings.ttsRate || 1.1;
+    
+    // GÁN GIỌNG NÓI - FIX: Phải tìm từ mảng voices hiện tại của browser
+    if (readerSettings.ttsVoice && synthesisRef.current) {
+        const allVoices = synthesisRef.current.getVoices();
+        const selectedVoice = allVoices.find(v => v.voiceURI === readerSettings.ttsVoice);
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        }
+    }
+
+    utterance.onend = () => {
+        // Chỉ tiếp tục nếu trình đọc vẫn đang mở và không bị pause
+        if (isReaderActiveRef.current && !isTTSPaused) {
+            playTTS(startIndex + 1);
+        }
+    };
+
+    utterance.onerror = (e) => {
+        console.error("TTS Error", e);
+        if (isReaderActiveRef.current) stopTTS();
+    };
+
+    synthesisRef.current?.speak(utterance);
+  }, [viewingChapter, readerSettings, viewingFileId, sortedChapters, stopTTS, isTTSPaused, addToast]);
+
+  const toggleTTSPause = () => {
+    if (synthesisRef.current?.speaking) {
+        if (synthesisRef.current.paused) {
+            synthesisRef.current.resume();
+            setIsTTSPaused(false);
+        } else {
+            synthesisRef.current.pause();
+            setIsTTSPaused(true);
+        }
+    } else {
+        playTTS(activeTTSIndex === -1 ? 0 : activeTTSIndex);
+    }
   };
 
-  const contextStatus = useMemo(() => {
-      if (isAnalyzing) return { text: "Đang phân tích...", icon: <Loader2 className="w-4 h-4 animate-spin" />, color: "bg-blue-50 text-blue-600 border-blue-200" };
-      // Use AlertTriangle icon for context warning
-      if (!currentProject?.globalContext || currentProject.globalContext.trim().length === 0) 
-          return { text: "Thiếu bối cảnh", icon: <AlertTriangle className="w-4 h-4" />, color: "bg-amber-50 text-amber-600 border-amber-200" };
-      return { text: "Đã có bối cảnh", icon: <CheckCircle className="w-4 h-4" />, color: "bg-emerald-50 text-emerald-600 border-emerald-200" };
-  }, [currentProject?.globalContext, isAnalyzing]);
+  // Mở trình đọc
+  const openReader = (id: string) => {
+    isReaderActiveRef.current = true;
+    setViewingFileId(id);
+  };
+
+  // Đóng trình đọc
+  const closeReader = () => {
+    isReaderActiveRef.current = false;
+    stopTTS();
+    setViewingFileId(null);
+    setShowTTSSettings(false);
+  };
+
+  useEffect(() => {
+    if (activeTTSIndex !== -1 && activeLineRef.current) {
+        activeLineRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [activeTTSIndex]);
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
+    <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
+      
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 z-50 transition-transform duration-300 lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-white/80 backdrop-blur-md">
-            <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-sky-500 rounded-lg text-white shadow-md"><Zap className="w-4 h-4" /></div>
-                <h1 className="font-bold text-base tracking-tight">Dịch Truyện Pro</h1>
+      <aside className={`fixed inset-y-0 left-0 z-50 w-72 glass-panel border-r border-slate-200 transition-transform duration-300 lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="flex flex-col h-full">
+          <div className="p-6 border-b border-slate-100">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg"><Languages className="w-6 h-6 text-white" /></div>
+              <h1 className="font-display font-bold text-xl text-slate-800">AI Novel <span className="text-indigo-600">Pro</span></h1>
             </div>
-            {/* Fix: X icon for mobile sidebar toggle */}
-            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 text-slate-400"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-            <div className="flex justify-between items-center px-2 mb-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Dự án ({projects.length})</span>
-                {/* Fix: PlusCircle icon for new project button */}
-                <button onClick={createNewProject} className="p-1 text-sky-600 hover:bg-sky-50 rounded-lg" title="Thêm dự án"><PlusCircle className="w-4 h-4" /></button>
-            </div>
-            {projects.map(p => (
-                <div key={p.id} onClick={() => { setCurrentProjectId(p.id); setIsSidebarOpen(false); }} className={`group p-3.5 rounded-xl cursor-pointer border transition-all ${currentProjectId === p.id ? 'bg-sky-50 border-sky-200' : 'bg-white border-transparent hover:bg-slate-50'}`}>
-                    <div className="flex justify-between items-center gap-2">
-                        <div className="min-w-0 flex-1">
-                            <h4 className="font-bold text-xs truncate">{p.info.title}</h4>
-                            {/* Fix: History icon for project list */}
-                            <p className="text-[9px] text-slate-400 mt-0.5 flex items-center gap-1"><History className="w-2.5 h-2.5" /> {new Date(p.lastModified).toLocaleDateString()}</p>
-                        </div>
-                        <button onClick={(e) => { e.stopPropagation(); if(confirm("Xóa dự án này?")) deleteProject(p.id).then(() => setProjects(prev => prev.filter(x => x.id !== p.id))); }} className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </div>
-                </div>
-            ))}
-        </div>
-        <div className="p-4 border-t border-slate-100">
-            <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-3 px-4 py-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all font-medium text-xs">
-                <Settings className={`w-4 h-4 ${!userApiKey ? 'text-rose-500 animate-pulse' : ''}`} />
-                <span>Cài đặt { !userApiKey && "(Cần nhập Key)"}</span>
+            <button onClick={() => setShowNewProjectModal(true)} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-2xl transition-all shadow-md active:scale-95">
+              <PlusCircle className="w-5 h-5" />Tạo Truyện Mới
             </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+            {projects.map(p => (
+              <div key={p.id} onClick={() => { setCurrentProjectId(p.id); setIsSidebarOpen(false); }} className={`group flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all ${currentProjectId === p.id ? 'bg-indigo-50 border border-indigo-100' : 'hover:bg-slate-100'}`}>
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <div className={`p-2 rounded-xl shrink-0 ${currentProjectId === p.id ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}><FileText className="w-4 h-4" /></div>
+                  <div className="truncate">
+                    <p className={`font-bold text-sm truncate ${currentProjectId === p.id ? 'text-indigo-900' : 'text-slate-700'}`}>{p.info.title}</p>
+                    <p className="text-xs text-slate-400">{p.chapters.length} chương</p>
+                  </div>
+                </div>
+                <button onClick={(e) => handleDeleteProject(p.id, e)} className="opacity-0 group-hover:opacity-100 p-2 hover:bg-rose-100 text-rose-500 rounded-xl transition-all"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            ))}
+          </div>
+          <div className="p-4 border-t border-slate-100"><button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-600 hover:bg-slate-100 font-semibold transition-all"><Settings className="w-5 h-5" />Cài đặt</button></div>
         </div>
       </aside>
 
-      {isSidebarOpen && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setIsSidebarOpen(false)} />}
+      {/* Main Area */}
+      <main className="flex-1 flex flex-col min-w-0 bg-transparent overflow-hidden">
+        <header className="h-16 glass-panel border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-40">
+          <div className="flex items-center gap-4">
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-slate-100 rounded-xl"><Menu className="w-6 h-6 text-slate-600" /></button>
+            <h2 className="font-display font-bold text-lg text-slate-800 truncate max-w-[200px] sm:max-w-md">{currentProject ? currentProject.info.title : "Chọn một truyện"}</h2>
+          </div>
+          {currentProject && (
+            <div className="flex items-center gap-4">
+                <div className="hidden sm:flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase">Tự động cào</span>
+                    <button onClick={() => setIsAutoCrawlEnabled(!isAutoCrawlEnabled)} className={`w-10 h-5 rounded-full relative transition-colors ${isAutoCrawlEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${isAutoCrawlEnabled ? 'left-5.5 translate-x-5' : 'left-0.5'}`}></div>
+                    </button>
+                </div>
+                <button onClick={() => isProcessing ? stopTranslation() : startTranslation(false)} className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-2 px-4 rounded-xl text-sm shadow-lg active:scale-95`}>
+                    {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {isProcessing ? "Dừng dịch" : "Dịch tiếp"}
+                </button>
+            </div>
+          )}
+        </header>
 
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-          {currentProject ? (
-            <>
-              <header className="h-16 bg-white border-b border-slate-200 px-4 lg:px-8 flex items-center justify-between shrink-0 z-10">
-                  <div className="flex items-center gap-3 min-w-0">
-                      <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-slate-50 rounded-xl"><Menu className="w-5 h-5" /></button>
-                      <div className="flex flex-col min-w-0">
-                          <input className="bg-transparent font-bold text-sm lg:text-base outline-none truncate" value={currentProject.info.title} onChange={e => updateProject(currentProject.id, { info: { ...currentProject.info, title: e.target.value } })} />
-                          <div className="flex items-center gap-2 text-[9px] lg:text-[10px] text-slate-400">
-                              <span className="flex items-center gap-1"><Book className="w-2.5 h-2.5" /> {currentProject.chapters.length}</span>
-                              {/* Fix: stats variable used for done count */}
-                              <span className="text-emerald-500 font-bold"><CheckCircle className="w-2.5 h-2.5 inline" /> {stats.done} xong</span>
-                          </div>
-                      </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                      <button onClick={() => setShowContextSetup(true)} className={`hidden sm:flex items-center gap-2 px-3 py-1.5 border rounded-lg font-bold text-[10px] transition-all ${contextStatus.color}`}>
-                          {contextStatus.icon} <span>{contextStatus.text}</span>
-                      </button>
-                      <button onClick={() => isProcessing ? stopTranslation() : handleStartTranslateRequest()} className={`px-4 py-1.5 rounded-lg font-bold text-[10px] shadow-sm ${isProcessing ? 'bg-rose-500 text-white' : 'bg-sky-500 text-white'}`}>
-                          {isProcessing ? 'Dừng' : 'Dịch'}
-                      </button>
-                      <button onClick={() => handleExport('epub')} className="p-2 text-slate-400 hover:bg-slate-100 rounded-lg"><Download className="w-4 h-4" /></button>
-                  </div>
-              </header>
-
-              <div className="flex-1 flex flex-col p-4 lg:p-6 overflow-hidden">
-                    <div className="mb-4 flex gap-2">
-                        <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                            <input className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-sky-100" placeholder="Tìm chương..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                        </div>
-                        <button onClick={() => setShowLinkModal(true)} className="flex items-center gap-2 px-4 py-2 bg-sky-50 text-sky-600 border border-sky-100 rounded-xl font-bold text-xs hover:bg-sky-100">
-                            <Link2 className="w-4 h-4" /> <span className="hidden sm:inline">Cào truyện</span>
-                        </button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 content-start pb-20">
-                        {currentProject.chapters.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map(ch => (
-                            <div key={ch.id} className={`p-3.5 rounded-2xl border transition-all flex flex-col gap-2 relative ${ch.status === FileStatus.COMPLETED ? 'bg-emerald-50/10 border-emerald-100' : ch.status === FileStatus.PROCESSING ? 'bg-sky-50/30 border-sky-100 animate-pulse' : 'bg-white border-slate-100'}`}>
-                                <div className="flex items-start justify-between gap-2">
-                                    <div className="flex items-center gap-2.5 min-w-0">
-                                        <div className={`p-2 rounded-xl shrink-0 ${ch.status === FileStatus.COMPLETED ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
-                                            {ch.status === FileStatus.PROCESSING ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                                        </div>
-                                        <div className="min-w-0">
-                                            <h5 className="font-bold text-[11px] truncate leading-tight">{ch.name}</h5>
-                                            <p className="text-[9px] text-slate-400 mt-0.5">{ch.originalCharCount} ký tự</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center">
-                                        <button onClick={() => setViewingFileId(ch.id)} className="p-1.5 text-slate-400 hover:text-sky-500 rounded-lg"><Eye className="w-3.5 h-3.5" /></button>
-                                        <button onClick={() => deleteChapter(ch.id)} className="p-1.5 text-slate-300 hover:text-rose-500 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
-                                    </div>
+        <div className="flex-1 overflow-y-auto p-6">
+          {!currentProject ? (
+              <div className="h-full flex flex-col items-center justify-center text-center">
+                  <div className="w-20 h-20 bg-slate-100 rounded-3xl flex items-center justify-center mb-6 text-slate-300"><Book className="w-10 h-10" /></div>
+                  <h2 className="text-xl font-bold text-slate-800 mb-2">Chào mừng bạn trở lại!</h2>
+                  <p className="text-slate-400 mb-8">Hãy chọn truyện hoặc tạo một dự án dịch mới.</p>
+                  <button onClick={() => setShowNewProjectModal(true)} className="flex items-center gap-3 bg-indigo-600 text-white font-bold py-4 px-8 rounded-2xl shadow-xl active:scale-95 transition-all"><Plus className="w-5 h-5" />Bắt đầu truyện đầu tiên</button>
+              </div>
+          ) : (
+            <div className="max-w-6xl mx-auto space-y-6">
+                <div className="flex flex-wrap gap-3">
+                    <input type="file" id="up" className="hidden" multiple accept=".txt,.zip" onChange={handleFileUpload} />
+                    <label htmlFor="up" className="flex items-center gap-2 bg-white border border-slate-200 p-3 rounded-2xl cursor-pointer hover:border-indigo-400 font-bold text-slate-600 shadow-sm"><PlusCircle className="w-5 h-5" />Tải File</label>
+                    <button onClick={() => setShowLinkModal(true)} className="flex items-center gap-2 bg-white border border-slate-200 p-3 rounded-2xl hover:border-amber-400 font-bold text-slate-600 shadow-sm"><Link2 className="w-5 h-5" />Cào Link</button>
+                    <button onClick={() => setShowContextSetup(true)} className="flex items-center gap-2 bg-white border border-slate-200 p-3 rounded-2xl hover:border-indigo-400 font-bold text-slate-600 shadow-sm"><Brain className="w-5 h-5" />Bối cảnh</button>
+                    <button onClick={() => downloadTextFile(`${currentProject.info.title}.txt`, createMergedFile(currentProject.chapters))} className="flex items-center gap-2 bg-slate-800 text-white p-3 rounded-2xl hover:bg-slate-900 font-bold shadow-lg"><Download className="w-5 h-5" />Xuất .TXT</button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {sortedChapters.map((ch) => (
+                        <div key={ch.id} className="bg-white p-5 rounded-3xl border border-slate-100 hover:shadow-xl transition-all relative overflow-hidden group">
+                            <h4 className="font-bold text-slate-800 truncate mb-3">{ch.name}</h4>
+                            <div className="flex items-center justify-between">
+                                <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-lg ${ch.status === FileStatus.COMPLETED ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>{ch.status}</span>
+                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    {ch.status === FileStatus.COMPLETED && <button onClick={() => openReader(ch.id)} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Eye className="w-4 h-4" /></button>}
+                                    <button onClick={() => updateProject(currentProject.id, { chapters: currentProject.chapters.filter(c => c.id !== ch.id) })} className="p-2 bg-rose-50 text-rose-500 rounded-xl"><Trash2 className="w-4 h-4" /></button>
                                 </div>
                             </div>
-                        ))}
-                    </div>
-              </div>
-            </>
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-white">
-                <div className="max-w-md w-full space-y-8 animate-in fade-in duration-700">
-                    <div className="relative mx-auto w-24 h-24 mb-6">
-                        <div className="absolute inset-0 bg-sky-500/20 blur-2xl rounded-full animate-pulse"></div>
-                        <div className="relative w-full h-full bg-gradient-to-br from-sky-400 to-sky-600 rounded-3xl flex items-center justify-center text-white shadow-xl">
-                            <Sparkles className="w-12 h-12" />
                         </div>
-                    </div>
-                    <div className="space-y-2">
-                        <h2 className="text-3xl font-black tracking-tight text-slate-900">Dịch Truyện AI</h2>
-                        <p className="text-slate-500 text-sm leading-relaxed">Nền tảng dịch truyện lậu mượt mà nhất. Sử dụng công nghệ Gemini 3.0 để tối ưu văn phong thuần Việt.</p>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3">
-                        <button onClick={createNewProject} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-lg hover:translate-y-[-2px] transition-all flex items-center justify-center gap-2">
-                            <Plus className="w-5 h-5" /> Bắt đầu Dự án Mới
-                        </button>
-                        <button onClick={() => setShowSettings(true)} className="w-full py-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2">
-                            <Key className="w-4 h-4" /> Cấu hình API Key
-                        </button>
-                    </div>
-                    <div className="pt-8 border-t border-slate-100 flex items-center justify-center gap-6">
-                        <a href="https://ai.google.dev/" target="_blank" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest hover:text-sky-500 transition-all flex items-center gap-1.5"><ExternalLink className="w-3 h-3" /> Lấy API Key Miễn phí</a>
-                    </div>
+                    ))}
                 </div>
             </div>
           )}
+        </div>
       </main>
 
-      {/* Reader Modal */}
+      {/* Reader View */}
       {viewingChapter && (
-          <div className={`fixed inset-0 z-[100] flex flex-col animate-in fade-in duration-300 ${readerSettings.bgColor}`}>
-             <header className="sticky top-0 h-14 px-4 border-b flex items-center justify-between shrink-0 bg-black/5 backdrop-blur-md z-20 py-2">
-                <div className="flex items-center gap-2 min-w-0">
-                    <button onClick={() => { stopTTS(); setViewingFileId(null); }} className="p-2 hover:bg-black/10 rounded-lg text-slate-500"><SkipBack className="w-4 h-4 rotate-90" /></button>
-                    <h3 className="font-bold text-xs lg:text-sm truncate">{viewingChapter.name}</h3>
+          <div className={`fixed inset-0 z-[60] flex flex-col animate-in fade-in duration-300 ${readerSettings.bgColor}`}>
+              <div className="h-16 flex items-center justify-between px-6 border-b border-black/5 bg-black/5 backdrop-blur-md">
+                <div className="flex items-center gap-4">
+                    <button onClick={closeReader} className="p-2 hover:bg-black/10 rounded-full"><X className="w-6 h-6" /></button>
+                    <h3 className="font-bold truncate max-w-xs">{viewingChapter.name}</h3>
                 </div>
-                <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1 bg-black/5 rounded-lg p-1">
-                        <button onClick={handlePrevChapter} className="p-1.5 hover:bg-black/10 rounded-md text-slate-600 disabled:opacity-30" disabled={sortedChapters.indexOf(viewingChapter) === 0}><SkipBack className="w-3.5 h-3.5" /></button>
-                        <span className="text-[10px] font-bold px-1">{sortedChapters.indexOf(viewingChapter) + 1}/{sortedChapters.length}</span>
-                        <button onClick={handleNextChapter} className="p-1.5 hover:bg-black/10 rounded-md text-slate-600 disabled:opacity-30" disabled={sortedChapters.indexOf(viewingChapter) === sortedChapters.length - 1}><SkipForward className="w-3.5 h-3.5" /></button>
-                    </div>
-                    <button onClick={() => isTTSPlaying ? stopTTS() : playTTS(viewingChapter.translatedContent || "")} className={`p-2 rounded-lg ${isTTSPlaying ? 'bg-sky-500 text-white' : 'bg-sky-500/10 text-sky-600'}`}>
-                        {isTTSPlaying ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                    </button>
-                    <button onClick={() => setViewingFileId(null)} className="p-2 bg-rose-50 text-rose-500 rounded-lg"><LogOut className="w-4 h-4" /></button>
+                <div className="flex items-center gap-3">
+                    <button onClick={() => setShowTTSSettings(!showTTSSettings)} className={`p-2 rounded-xl transition-all ${showTTSSettings ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-black/10'}`} title="Cài đặt TTS"><Sliders className="w-5 h-5" /></button>
+                    <button onClick={() => setReaderSettings(prev => ({ ...prev, showOriginal: !prev.showOriginal }))} className={`p-2 rounded-xl transition-all ${readerSettings.showOriginal ? 'bg-indigo-600 text-white' : 'hover:bg-black/10'}`}><Eye className="w-5 h-5" /></button>
+                    <div className="w-px h-6 bg-black/10 mx-2"></div>
+                    <button onClick={() => {
+                        const idx = sortedChapters.findIndex(c => c.id === viewingFileId);
+                        if (idx > 0) setViewingFileId(sortedChapters[idx - 1].id);
+                    }} className="p-2 hover:bg-black/10 rounded-xl disabled:opacity-20" disabled={sortedChapters.findIndex(c => c.id === viewingFileId) === 0}><SkipBack className="w-5 h-5" /></button>
+                    <button onClick={() => {
+                        const idx = sortedChapters.findIndex(c => c.id === viewingFileId);
+                        if (idx < sortedChapters.length - 1) setViewingFileId(sortedChapters[idx + 1].id);
+                    }} className="p-2 hover:bg-black/10 rounded-xl disabled:opacity-20" disabled={sortedChapters.findIndex(c => c.id === viewingFileId) === sortedChapters.length - 1}><SkipForward className="w-5 h-5" /></button>
                 </div>
-             </header>
+              </div>
 
-             <div ref={readerScrollRef} className="flex-1 overflow-y-auto p-5 lg:p-10 scroll-smooth">
-                <div className={`max-w-2xl mx-auto space-y-6 ${readerSettings.fontFamily}`} style={{ fontSize: `${readerSettings.fontSize}px` }}>
-                    {viewingChapter.translatedContent ? (
-                        viewingChapter.translatedContent.split('\n').filter(l => l.trim().length > 0).map((p, i) => (
-                            <div key={i} data-index={i} onClick={() => toggleParagraphOriginal(i)} className={`p-2 rounded-xl transition-all relative cursor-pointer group hover:bg-black/5 ${activeTTSIndex === i ? 'bg-sky-500/10 ring-1 ring-sky-500/20' : ''}`}>
-                                <p className="leading-relaxed whitespace-pre-wrap">{p}</p>
-                            </div>
-                        ))
-                    ) : (
-                        <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
-                            {/* Fix: Hourglass icon for loading state */}
-                            <Hourglass className="w-8 h-8 animate-pulse" />
-                            <p className="text-sm italic">Đang đợi bản dịch...</p>
-                        </div>
-                    )}
-                    <div className="h-64" />
-                </div>
-             </div>
-          </div>
-      )}
-
-      {/* Settings Modal (API Key Management) */}
-      {showSettings && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] flex items-center justify-center p-4">
-              <div className="bg-white rounded-[28px] shadow-2xl w-full max-md overflow-hidden animate-in zoom-in-95">
-                  <div className="p-6 lg:p-8 space-y-6">
-                      <div className="flex items-center gap-4">
-                          <div className="p-3 bg-slate-900 text-white rounded-2xl shadow-lg"><Settings className="w-6 h-6" /></div>
-                          <div><h3 className="text-xl font-bold">Cài đặt</h3><p className="text-xs text-slate-500 font-medium">Cấu hình API Key để sử dụng dịch thuật.</p></div>
+              {/* TTS Settings Overlay */}
+              {showTTSSettings && (
+                  <div className="absolute top-20 right-6 w-80 bg-white rounded-3xl shadow-2xl p-6 z-[70] border border-slate-100 animate-in slide-in-from-top-4 duration-300">
+                      <div className="flex items-center justify-between mb-6">
+                          <h4 className="font-bold text-slate-800">Cấu hình TTS</h4>
+                          <button onClick={() => setShowTTSSettings(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
                       </div>
-                      <div className="space-y-4">
+                      <div className="space-y-6">
                           <div className="space-y-2">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Gemini API Key</label>
-                              <div className="relative">
-                                  <input 
-                                    type="password" 
-                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-sky-500 outline-none pr-12 font-mono" 
-                                    placeholder="Dán key của bạn vào đây..."
-                                    value={userApiKey}
-                                    onChange={(e) => setUserApiKey(e.target.value)}
-                                  />
-                                  <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                                      {userApiKey ? <CheckCircle className="w-5 h-5 text-emerald-500" /> : <Key className="w-5 h-5 text-slate-300" />}
-                                  </div>
-                              </div>
-                              <a href="https://aistudio.google.com/app/apikey" target="_blank" className="flex items-center gap-1.5 text-[10px] text-sky-600 font-bold hover:underline px-1"><HelpCircle className="w-3 h-3" /> Hướng dẫn lấy Key miễn phí (Google AI Studio)</a>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Giọng nói</label>
+                              <select 
+                                value={readerSettings.ttsVoice} 
+                                onChange={(e) => setReaderSettings(prev => ({ ...prev, ttsVoice: e.target.value }))}
+                                className="w-full p-3 rounded-xl bg-slate-50 border-transparent focus:border-indigo-500 outline-none text-sm font-medium text-slate-800"
+                              >
+                                  <option value="">Mặc định hệ thống</option>
+                                  {availableVoices.map(v => (
+                                      <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                                  ))}
+                              </select>
                           </div>
-                          <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl space-y-2">
-                              <h4 className="text-[10px] font-bold text-amber-700 uppercase">Lưu ý bảo mật</h4>
-                              <p className="text-[10px] text-amber-600 leading-relaxed font-medium">Key của bạn được lưu trực tiếp tại trình duyệt (Local Storage). Chúng tôi không thu thập hoặc lưu trữ Key của bạn trên bất kỳ máy chủ nào khác.</p>
+                          <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tốc độ đọc</label>
+                                  <span className="text-xs font-bold text-indigo-600">{readerSettings.ttsRate}x</span>
+                              </div>
+                              <input 
+                                type="range" min="0.5" max="2.5" step="0.1" 
+                                value={readerSettings.ttsRate} 
+                                onChange={(e) => setReaderSettings(prev => ({ ...prev, ttsRate: parseFloat(e.target.value) }))}
+                                className="w-full accent-indigo-600 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer"
+                              />
                           </div>
                       </div>
-                      <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-xl active:scale-95 transition-all">Lưu và Đóng</button>
+                  </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-6" ref={readerScrollRef}>
+                  <div className="max-w-3xl mx-auto py-12">
+                      <h1 className="text-3xl font-bold mb-16 text-center opacity-80">{viewingChapter.name}</h1>
+                      <div className={`space-y-8 leading-relaxed ${readerSettings.fontFamily}`} style={{ fontSize: `${readerSettings.fontSize}px` }}>
+                          {viewingChapter.translatedContent?.split('\n').filter(l => l.trim().length > 0).map((line, idx) => (
+                              <div 
+                                key={idx} 
+                                ref={activeTTSIndex === idx ? activeLineRef : null}
+                                onClick={() => playTTS(idx)}
+                                className={`p-4 rounded-2xl transition-all duration-500 cursor-pointer hover:bg-black/5 ${activeTTSIndex === idx ? 'bg-indigo-500/10 ring-1 ring-indigo-500/20 shadow-sm scale-[1.02]' : ''}`}
+                              >
+                                  <p className={`${activeTTSIndex === idx ? 'text-indigo-900 font-medium' : 'opacity-90'}`}>{line.trim()}</p>
+                                  {readerSettings.showOriginal && (
+                                      <p className="mt-2 text-[0.8em] italic opacity-40 font-sans border-l-2 border-indigo-500/20 pl-4">
+                                          {viewingChapter.content.split('\n').filter(l => l.trim().length > 0)[idx] || "..."}
+                                      </p>
+                                  )}
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              </div>
+
+              <div className="p-6 bg-black/5 border-t border-black/5 flex flex-wrap items-center justify-center gap-6">
+                  <div className="flex items-center gap-3 bg-black/5 rounded-2xl p-1.5">
+                      {BG_COLORS.map(c => (
+                          <button key={c.code} onClick={() => setReaderSettings(prev => ({ ...prev, bgColor: c.code }))} className={`w-8 h-8 rounded-xl border-2 transition-all ${c.code} ${readerSettings.bgColor === c.code ? 'border-indigo-500 scale-110' : 'border-transparent'}`} />
+                      ))}
+                  </div>
+                  <div className="flex items-center gap-4 bg-black/5 rounded-2xl px-4 py-2">
+                      <button onClick={() => setReaderSettings(prev => ({ ...prev, fontSize: Math.max(12, prev.fontSize - 1) }))} className="p-1 hover:bg-black/10 rounded"><Type className="w-4 h-4 scale-75" /></button>
+                      <span className="font-bold text-xs">{readerSettings.fontSize}</span>
+                      <button onClick={() => setReaderSettings(prev => ({ ...prev, fontSize: Math.min(36, prev.fontSize + 1) }))} className="p-1 hover:bg-black/10 rounded"><Type className="w-5 h-5" /></button>
+                  </div>
+                  <div className="flex items-center gap-2 bg-indigo-600 rounded-2xl p-1 shadow-lg shadow-indigo-200">
+                      <button onClick={stopTTS} className="p-3 text-white hover:bg-white/10 rounded-xl transition-all"><Square className="w-5 h-5 fill-white" /></button>
+                      <button onClick={toggleTTSPause} className="p-3 bg-white text-indigo-600 rounded-xl shadow-sm hover:scale-105 active:scale-95 transition-all">
+                          {isTTSPaused || activeTTSIndex === -1 ? <Play className="w-6 h-6 fill-indigo-600" /> : <Pause className="w-6 h-6 fill-indigo-600" />}
+                      </button>
+                      <button onClick={() => playTTS(activeTTSIndex + 1)} className="p-3 text-white hover:bg-white/10 rounded-xl transition-all"><SkipForward className="w-5 h-5 fill-white" /></button>
                   </div>
               </div>
           </div>
+      )}
+
+      {/* New Project Modal */}
+      {showNewProjectModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-[2.5rem] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+                <div className="px-8 py-6 border-b flex items-center justify-between">
+                    <h3 className="font-display font-bold text-2xl">Thông tin truyện mới</h3>
+                    <button onClick={() => setShowNewProjectModal(false)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-6 h-6" /></button>
+                </div>
+                <div className="p-8 overflow-y-auto space-y-6 custom-scrollbar">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase">Tên truyện</label>
+                            <input type="text" placeholder="Phàm Nhân Tu Tiên" value={newProjectInfo.title} onChange={(e) => setNewProjectInfo({...newProjectInfo, title: e.target.value})} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-semibold text-slate-800" />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase">Tác giả</label>
+                            <input type="text" placeholder="Vong Ngữ" value={newProjectInfo.author} onChange={(e) => setNewProjectInfo({...newProjectInfo, author: e.target.value})} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-semibold text-slate-800" />
+                        </div>
+                    </div>
+                </div>
+                <div className="p-8 bg-slate-50 border-t flex gap-4">
+                    <button onClick={() => setShowNewProjectModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button>
+                    <button onClick={createNewProject} className="flex-[2] bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-all">Tạo Dự án</button>
+                </div>
+            </div>
+        </div>
       )}
 
       {/* Crawl Modal */}
       {showLinkModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-              <div className="bg-white rounded-[28px] shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
-                  <div className="p-6 lg:p-8 space-y-6">
-                      <div className="flex items-center gap-4">
-                          <div className="p-3 bg-sky-100 text-sky-600 rounded-2xl"><Link2 className="w-6 h-6" /></div>
-                          <div><h3 className="text-xl font-bold">Cào Truyện</h3><p className="text-xs text-slate-500 font-medium">Tự động lấy nội dung từ các trang web truyện.</p></div>
-                      </div>
-                      <textarea className="w-full h-24 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-sky-500" placeholder="Dán link chương đầu tiên..." value={linkInput} onChange={e => setLinkInput(e.target.value)} />
-                      <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                          <span className="text-xs font-bold text-slate-600">Số chương muốn lấy:</span>
-                          <input type="number" className="w-16 p-2 bg-white border rounded-xl text-xs text-center font-bold" value={crawlLimit} onChange={e => setCrawlLimit(Math.max(1, parseInt(e.target.value) || 0))} />
-                      </div>
-                      {fetchProgress && (
-                          <div className="space-y-2">
-                              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase">
-                                  <span>Tiến độ: {fetchProgress.current}/{fetchProgress.total}</span>
-                                  <button onClick={() => { stopCrawlRef.current = true; }} className="text-rose-500">Dừng</button>
-                              </div>
-                              <div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-sky-500 transition-all" style={{ width: `${(fetchProgress.current / fetchProgress.total) * 100}%` }} /></div>
-                          </div>
-                      )}
-                      <div className="flex gap-3 pt-2">
-                          <button onClick={() => setShowLinkModal(false)} className="flex-1 py-4 font-bold text-slate-400 text-sm hover:bg-slate-50 rounded-2xl transition-all">Hủy</button>
-                          <button onClick={handleLinkSubmit} disabled={isFetchingLinks || !linkInput} className="flex-[2] py-4 bg-sky-500 text-white rounded-2xl font-bold text-sm shadow-lg disabled:opacity-50">Bắt đầu cào</button>
-                      </div>
-                  </div>
-              </div>
-          </div>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-white rounded-[2.5rem] w-full max-w-lg overflow-hidden shadow-2xl">
+                <div className="p-8">
+                    <div className="flex items-center gap-3 mb-6"><div className="p-3 bg-amber-100 rounded-2xl text-amber-600"><Link2 className="w-6 h-6" /></div><h3 className="font-display font-bold text-2xl">Cào chương</h3></div>
+                    <input type="url" placeholder="Link chương đầu..." value={linkInput} onChange={(e) => setLinkInput(e.target.value)} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none mb-4 font-semibold text-slate-800" />
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-400 uppercase">Số chương: {crawlLimit}</label>
+                        <input type="range" min="1" max="50" value={crawlLimit} onChange={(e) => setCrawlLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" />
+                    </div>
+                </div>
+                <div className="p-8 bg-slate-50 flex gap-4"><button onClick={() => setShowLinkModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={() => handleLinkCrawl()} className="flex-[2] bg-indigo-600 text-white font-bold py-4 rounded-2xl">Bắt đầu cào</button></div>
+            </div>
+        </div>
       )}
 
       {/* Context Setup */}
-      {showContextSetup && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
-              <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-xl overflow-hidden animate-in zoom-in-95">
-                  <div className="p-8 space-y-6">
-                      <div className="flex items-center gap-4">
-                          <div className="p-4 bg-emerald-100 text-emerald-600 rounded-3xl"><Brain className="w-8 h-8" /></div>
-                          <div><h3 className="text-2xl font-bold">Bối cảnh truyện</h3><p className="text-sm text-slate-500">Giúp AI hiểu thế giới và xưng hô tốt hơn.</p></div>
-                      </div>
-                      <textarea className="w-full h-56 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-sky-500 outline-none resize-none" placeholder="Ví dụ: Truyện tiên hiệp, main tên Lâm Phong, tính cách cẩn trọng. Thế giới tu chân cấp độ: Luyện khí, Trúc cơ..." value={currentProject?.globalContext} onChange={(e) => updateProject(currentProject!.id, { globalContext: e.target.value })} />
-                      <div className="flex gap-4">
-                          <button onClick={() => startTranslation(false)} className="flex-1 py-4 font-bold text-slate-400 hover:bg-slate-50 rounded-2xl">Bỏ qua</button>
-                          <button onClick={() => { startTranslation(false); }} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold shadow-lg hover:bg-emerald-600 transition-all">Lưu & Dịch</button>
-                      </div>
-                  </div>
+      {showContextSetup && currentProject && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="px-8 py-6 border-b flex items-center justify-between">
+              <h3 className="font-display font-bold text-2xl">Thiết lập bối cảnh</h3>
+              <button onClick={() => setShowContextSetup(false)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-6 h-6" /></button>
+            </div>
+            <div className="p-8 overflow-y-auto space-y-6 flex-1">
+                <button onClick={handleAnalyzeContext} disabled={isAnalyzing} className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-bold py-4 rounded-2xl shadow-xl disabled:opacity-50">
+                  {isAnalyzing ? <Loader2 className="w-6 h-6 animate-spin" /> : <Wand2 className="w-6 h-6" />}
+                  AI Tự động lập Bối cảnh
+                </button>
+                <textarea value={currentProject.globalContext} onChange={(e) => updateProject(currentProject.id, { globalContext: e.target.value })} placeholder="Dán bối cảnh..." className="w-full h-80 p-5 rounded-3xl bg-slate-50 border-2 border-transparent focus:bg-white focus:border-indigo-500 outline-none font-mono text-sm leading-relaxed text-slate-800" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings */}
+      {showSettings && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <div className="bg-white rounded-[2.5rem] w-full max-w-lg overflow-hidden shadow-2xl p-8 text-center">
+                  <h3 className="font-display font-bold text-2xl mb-6">Cài đặt</h3>
+                  <p className="text-slate-500 font-medium mb-8">API Key được cấu hình tự động. Hệ thống sử dụng Gemini 3.0 Pro.</p>
+                  <button onClick={() => setShowSettings(false)} className="w-full bg-slate-800 text-white font-bold py-4 rounded-2xl shadow-xl">Đóng</button>
               </div>
           </div>
       )}
 
       {/* Toasts */}
-      <div className="fixed bottom-6 right-4 left-4 sm:left-auto lg:right-6 z-[400] flex flex-col gap-3">
-          {toasts.map(t => (
-              <div key={t.id} className={`px-5 py-3.5 rounded-2xl shadow-xl border flex items-center gap-3 animate-in slide-in-from-bottom lg:slide-in-from-right backdrop-blur-md ${t.type === 'error' ? 'bg-rose-50/90 border-rose-100 text-rose-600' : 'bg-white/90 border-slate-200 text-slate-700'}`}>
-                  {/* Fix: Info icon for generic toasts */}
-                  {t.type === 'success' ? <CheckCircle className="w-4 h-4" /> : t.type === 'error' ? <AlertCircle className="w-4 h-4" /> : <Info className="w-4 h-4" />}
-                  <span className="font-bold text-xs">{t.message}</span>
-              </div>
-          ))}
+      <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
+        {toasts.map(t => (
+          <div key={t.id} className={`pointer-events-auto flex items-center gap-4 px-6 py-4 rounded-2xl shadow-2xl border-2 animate-in slide-in-from-right duration-300 min-w-[280px] ${
+            t.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-100' :
+            t.type === 'error' ? 'bg-rose-50 text-rose-800 border-rose-100' :
+            'bg-white text-slate-800 border-slate-100'
+          }`}>
+            <div className={`p-2 rounded-xl ${t.type === 'success' ? 'bg-emerald-500 text-white' : t.type === 'error' ? 'bg-rose-500 text-white' : 'bg-indigo-500 text-white'}`}>
+                {t.type === 'success' ? <CheckCircle className="w-4 h-4" /> : t.type === 'error' ? <AlertCircle className="w-4 h-4" /> : <Info className="w-4 h-4" />}
+            </div>
+            <span className="font-bold text-sm">{t.message}</span>
+          </div>
+        ))}
       </div>
     </div>
   );

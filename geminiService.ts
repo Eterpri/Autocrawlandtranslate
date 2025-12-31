@@ -4,12 +4,9 @@ import { quotaManager } from './utils/quotaManager';
 import { MODEL_CONFIGS, GLOSSARY_ANALYSIS_PROMPT } from './constants';
 import { StoryInfo, FileItem } from './types';
 
+// Use process.env.API_KEY directly for initialization as per guidelines
 const getAiClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("Không tìm thấy API Key. Vui lòng kiểm tra biến môi trường.");
-  }
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 const optimizeDictionary = (dictionary: string, content: string): string => {
@@ -42,7 +39,7 @@ const handleErrorQuota = (error: any, modelId: string) => {
 
 const selectModel = (allowedModelIds: string[]) => {
   const currentConfigs = quotaManager.getConfigs();
-  const priorityTier = ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash'];
+  const priorityTier = ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash'];
   const available = currentConfigs
     .filter(c => allowedModelIds.includes(c.id) && quotaManager.isModelAvailable(c.id))
     .sort((a, b) => priorityTier.indexOf(a.id) - priorityTier.indexOf(b.id));
@@ -52,9 +49,14 @@ const selectModel = (allowedModelIds: string[]) => {
 
 export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInfo): Promise<string> => {
     const ai = getAiClient();
-    const modelsToTry = ['gemini-3-pro-preview', 'gemini-3-flash-preview'];
-    let contextContent = files.slice(0, 5).map(f => f.content).join('\n').substring(0, 50000);
-    const userPrompt = `Phân tích cốt truyện và lập từ điển nhân vật từ nội dung sau:\n${contextContent}`;
+    // Ưu tiên Flash trên mobile để tránh timeout và tiết kiệm quota
+    const modelsToTry = ['gemini-3-flash-preview', 'gemini-3-pro-preview'];
+    
+    // Lấy mẫu nội dung cực ngắn (1500 ký tự mỗi phần) để tránh crash trình duyệt mobile
+    const sampleFiles = files.length > 3 ? [files[0], files[Math.floor(files.length/2)], files[files.length-1]] : files;
+    let contextContent = sampleFiles.map(f => `--- ${f.name} ---\n${f.content.substring(0, 1500)}`).join('\n\n');
+    
+    const userPrompt = `Phân tích cốt truyện, xưng hô và lập từ điển nhân vật cho truyện "${storyInfo.title}" từ nội dung mẫu sau:\n\n${contextContent}`;
 
     for (const modelId of modelsToTry) {
         if (!quotaManager.isModelAvailable(modelId)) continue;
@@ -64,10 +66,10 @@ export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInf
                 contents: userPrompt,
                 config: {
                     systemInstruction: GLOSSARY_ANALYSIS_PROMPT,
-                    temperature: 0.2,
-                    thinkingConfig: { thinkingBudget: 8192 }
+                    temperature: 0.3,
                 },
             });
+            // Accessing .text property as per guidelines
             if (response.text) {
                 quotaManager.recordRequest(modelId);
                 return response.text.trim();
@@ -76,7 +78,7 @@ export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInf
             handleErrorQuota(error, modelId);
         }
     }
-    return "Không thể phân tích ngữ cảnh.";
+    throw new Error("AI không thể phản hồi lúc này. Vui lòng thử lại sau hoặc tự điền bối cảnh.");
 };
 
 export const translateBatch = async (
@@ -119,10 +121,12 @@ QUY TẮC CỨNG:
                     systemInstruction,
                     temperature: 0.2,
                     maxOutputTokens: 60000,
-                    ...(isGemini3 ? { thinkingConfig: { thinkingBudget: 12000 } } : {})
+                    // Thinking Config is supported for Gemini 3 and 2.5 series
+                    ...(isGemini3 && modelId.includes('pro') ? { thinkingConfig: { thinkingBudget: 4000 } } : {})
                 },
             });
 
+            // Accessing .text property as per guidelines
             if (!response.text) continue;
             
             const results = new Map<string, string>();
@@ -131,11 +135,9 @@ QUY TẮC CỨNG:
                 const match = response.text.match(regex);
                 if (match) {
                     let translated = match[1].trim();
-                    // Hậu xử lý loại bỏ model lỡ copy lại chữ Hán
                     translated = translated.split('\n').filter(line => {
                         const hasVietnamese = /[a-zA-Záàảãạâấầẩẫậăắằẳẵặéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]/i.test(line);
                         const hasChinese = /[\u4e00-\u9fa5]/.test(line);
-                        // Nếu dòng có chữ Hán mà không có chữ Việt, hoặc tỷ lệ chữ Hán quá cao -> dòng lỗi
                         if (hasChinese && !hasVietnamese) return false;
                         return true;
                     }).join('\n');
