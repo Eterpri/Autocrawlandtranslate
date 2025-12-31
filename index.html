@@ -1,0 +1,139 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dịch & Biên Tập Truyện - Nguyễn Trí Hiếu</title>
+    
+    <!-- Fonts: Outfit for headings, Inter for body -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;700;800&display=swap" rel="stylesheet">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              display: ['Outfit', 'sans-serif'],
+            },
+            colors: {
+              sky: {
+                50: '#f0f9ff',
+                100: '#e0f2fe',
+                200: '#bae6fd',
+                300: '#7dd3fc',
+                400: '#38bdf8',
+                500: '#0ea5e9',
+                600: '#0284c7',
+                700: '#0369a1',
+                800: '#075985',
+                900: '#0c4a6e',
+              },
+              slate: {
+                850: '#151e2e',
+              }
+            },
+            animation: {
+              'blob': 'blob 7s infinite',
+            },
+            keyframes: {
+              blob: {
+                '0%': { transform: 'translate(0px, 0px) scale(1)' },
+                '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
+                '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
+                '100%': { transform: 'translate(0px, 0px) scale(1)' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        background-color: #f8fafc;
+        min-height: 100vh;
+        color: #334155;
+        overflow-x: hidden;
+      }
+      
+      /* Mesh Gradient Background */
+      .mesh-bg {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: -1;
+        background-color: #f1f5f9;
+        background-image: 
+          radial-gradient(at 40% 20%, hsla(215,98%,61%,0.15) 0px, transparent 50%),
+          radial-gradient(at 80% 0%, hsla(189,100%,56%,0.15) 0px, transparent 50%),
+          radial-gradient(at 0% 50%, hsla(264,95%,60%,0.15) 0px, transparent 50%),
+          radial-gradient(at 80% 50%, hsla(218,85%,65%,0.15) 0px, transparent 50%),
+          radial-gradient(at 0% 100%, hsla(22,100%,77%,0.15) 0px, transparent 50%),
+          radial-gradient(at 80% 100%, hsla(242,100%,70%,0.15) 0px, transparent 50%),
+          radial-gradient(at 0% 0%, hsla(343,100%,76%,0.15) 0px, transparent 50%);
+      }
+
+      /* Subtle Grid Pattern Overlay */
+      .grid-pattern {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: -1;
+        background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2394a3b8' fill-opacity='0.08'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      }
+      
+      /* Custom scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: rgba(0,0,0,0.02); 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1; 
+        border-radius: 99px;
+        border: 2px solid rgba(0,0,0,0);
+        background-clip: padding-box;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+        border: 2px solid rgba(0,0,0,0);
+        background-clip: padding-box; 
+      }
+
+      .glass-panel {
+        background: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "jszip": "https://aistudiocdn.com/jszip@^3.10.1",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1"
+  }
+}
+</script>
+</head>
+  <body>
+    <div class="mesh-bg"></div>
+    <div class="grid-pattern"></div>
+    <div id="root" class="h-screen w-full relative z-10"></div>
+  </body>
+</html>
