@@ -282,7 +282,7 @@ const App: React.FC = () => {
                 remainingRawCharCount: 0 
             };
             
-            // Cập nhật trạng thái project
+            // Cập nhật trạng thái project ngay lập tức
             setProjects(prev => prev.map(p => p.id === currentProject.id ? { 
                 ...p, 
                 chapters: [...p.chapters, newChapter], 
@@ -290,15 +290,16 @@ const App: React.FC = () => {
                 lastModified: Date.now()
             } : p));
 
-            // TỰ ĐỘNG DỊCH: Nếu bật Auto Dịch, đẩy luôn vào hàng đợi
+            // TỰ ĐỘNG DỊCH: Đẩy vào queue và kích hoạt isProcessing nếu enabled
             if (isAutoCrawlEnabled) {
                 setProcessingQueue(prev => [...prev, chapterId]);
-                if (!isProcessing) setIsProcessing(true);
+                setIsProcessing(true);
             }
 
             currentUrl = result.nextUrl || "";
             count++;
             if (!currentUrl) break;
+            // Delay nhẹ để tránh bị block IP
             await new Promise(r => setTimeout(r, 2000));
         }
         if (count > 0) addToast(`Đã cào xong ${count} chương mới`, "success");
@@ -568,7 +569,7 @@ const App: React.FC = () => {
                   <div className="px-8 py-6 border-b flex items-center justify-between">
                       <div className="flex items-center gap-3">
                           <Brain className="w-6 h-6 text-indigo-600" />
-                          <h3 className="font-bold text-xl">Thiết lập Bối cảnh & Từ điển</h3>
+                          <h3 className="font-bold text-xl text-slate-800">Bối cảnh & Từ điển</h3>
                       </div>
                       <div className="flex items-center gap-3">
                           <input type="file" id="dict-up" className="hidden" accept=".txt" onChange={handleDictionaryUpload} />
@@ -584,14 +585,14 @@ const App: React.FC = () => {
                               {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand className="w-4 h-4" />}
                               {isAnalyzing ? "Đang phân tích..." : "AI Tự Phân Tích"}
                           </button>
-                          <button onClick={() => setShowContextSetup(false)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-6 h-6" /></button>
+                          <button onClick={() => setShowContextSetup(false)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-6 h-6 text-slate-400" /></button>
                       </div>
                   </div>
                   <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
                       <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Từ điển & Ghi chú (Glossary)</label>
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Từ điển & Xưng hô (Định dạng: Gốc=Dịch)</label>
                           <textarea 
-                              placeholder="Dữ liệu từ điển (định dạng: từ gốc = từ dịch)..."
+                              placeholder="Ví dụ: 我=ta"
                               value={currentProject.dictionary}
                               onChange={e => updateProject(currentProject.id, { dictionary: e.target.value })}
                               className="w-full h-96 p-5 rounded-2xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-400 font-mono text-sm leading-relaxed"
@@ -600,7 +601,7 @@ const App: React.FC = () => {
                       <div className="space-y-2">
                           <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Phân tích bối cảnh AI (Series Bible)</label>
                           <textarea 
-                              placeholder="AI sẽ phân tích xưng hô và bối cảnh tại đây..."
+                              placeholder="Kết quả phân tích từ AI sẽ hiện ở đây..."
                               value={currentProject.globalContext}
                               onChange={e => updateProject(currentProject.id, { globalContext: e.target.value })}
                               className="w-full h-64 p-5 rounded-2xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-400 font-mono text-sm leading-relaxed"
