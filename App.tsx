@@ -52,7 +52,6 @@ const App: React.FC = () => {
   const [showTTSSettings, setShowTTSSettings] = useState<boolean>(false);
   
   const [linkInput, setLinkInput] = useState<string>("");
-  const [crawlLimit, setCrawlLimit] = useState<number>(10);
   const [isAutoCrawlEnabled, setIsAutoCrawlEnabled] = useState<boolean>(true);
   const [isFetchingLinks, setIsFetchingLinks] = useState<boolean>(false);
   const isFetchingLinksRef = useRef<boolean>(false);
@@ -60,6 +59,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const [isApiKeyReady, setIsApiKeyReady] = useState(false);
 
   const [isWakeLockActive, setIsWakeLockActive] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
@@ -90,6 +90,14 @@ const App: React.FC = () => {
   const [newProjectInfo, setNewProjectInfo] = useState({
       title: '', author: '', languages: ['Convert thô'], genres: ['Tiên Hiệp'], mcPersonality: ['Trầm ổn/Già dặn'], worldSetting: ['Trung Cổ/Cổ Đại'], sectFlow: ['Phàm nhân lưu']
   });
+
+  useEffect(() => {
+    // Check for API Key on mount
+    const apiKey = process.env.API_KEY;
+    if (apiKey && apiKey.length > 30) {
+      setIsApiKeyReady(true);
+    }
+  }, []);
 
   const safeStr = (val: any): string => {
     if (val === null || val === undefined) return "";
@@ -417,12 +425,13 @@ const App: React.FC = () => {
                 }
                 return c;
             }) } : p));
-        } catch (e) {
+        } catch (e: any) {
+            addToast(`Lỗi dịch: ${e.message}`, 'error');
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR } : c) } : p));
         } finally { setActiveWorkers(prev => prev - 1); }
     };
     processBatch();
-  }, [isProcessing, processingQueue, activeWorkers, currentProjectId]);
+  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, addToast]);
 
   const sortedChapters = useMemo(() => {
     if (!currentProject) return [];
@@ -510,6 +519,24 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
+      {!isApiKeyReady && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white rounded-3xl w-full max-w-md m-4 p-8 text-center shadow-2xl">
+                <div className="w-16 h-16 bg-amber-100 text-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                    <Key className="w-8 h-8" />
+                </div>
+                <h2 className="text-xl font-bold text-slate-800 mb-2">Cần Thiết Lập API Key</h2>
+                <p className="text-slate-500 text-sm mb-6">
+                    Ứng dụng này cần Google Gemini API Key để hoạt động. Vui lòng thiết lập biến môi trường <code className="bg-slate-100 text-slate-700 font-mono p-1 rounded-md text-xs">API_KEY</code> trong phần cài đặt của Vercel và deploy lại.
+                </p>
+                <a href="https://vercel.com/docs/projects/environment-variables" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl shadow-lg active:scale-95 transition-all">
+                    <ExternalLink className="w-4 h-4" />
+                    Xem hướng dẫn của Vercel
+                </a>
+            </div>
+        </div>
+      )}
+
       <aside className={`fixed inset-y-0 left-0 z-50 w-72 glass-panel border-r border-slate-200 transition-transform duration-300 lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex flex-col h-full">
           <div className="p-6 border-b border-slate-100">
@@ -554,11 +581,17 @@ const App: React.FC = () => {
           </div>
           {currentProject && (
             <div className="flex items-center gap-3">
-                <button onClick={() => setShowContextSetup(true)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all flex items-center gap-2 font-semibold text-sm" title="Bối cảnh truyện">
+                <button 
+                  onClick={() => setShowContextSetup(true)}
+                  disabled={!isApiKeyReady}
+                  className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all flex items-center gap-2 font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed" title="Bối cảnh truyện">
                     <Brain className="w-5 h-5" />
                     <span className="hidden sm:inline">Bối cảnh</span>
                 </button>
-                <button onClick={() => isProcessing ? stopTranslation() : startTranslation(false)} className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-2.5 px-5 rounded-xl text-sm shadow-lg active:scale-95 transition-all`}>
+                <button 
+                  onClick={() => isProcessing ? stopTranslation() : startTranslation(false)}
+                  disabled={!isApiKeyReady}
+                  className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-2.5 px-5 rounded-xl text-sm shadow-lg active:scale-95 transition-all disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed`}>
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                     {isProcessing ? "Dừng dịch" : "Bắt đầu dịch"}
                 </button>
@@ -622,8 +655,8 @@ const App: React.FC = () => {
                           </label>
                           <button 
                             onClick={handleAIAnalyze} 
-                            disabled={isAnalyzing}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all ${isAnalyzing ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-inner' : 'bg-amber-50 text-amber-600 hover:bg-amber-100 shadow-sm'}`}
+                            disabled={isAnalyzing || !isApiKeyReady}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all ${isAnalyzing ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-inner' : 'bg-amber-50 text-amber-600 hover:bg-amber-100 shadow-sm'} disabled:opacity-50 disabled:cursor-not-allowed`}
                           >
                               {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand className="w-4 h-4" />}
                               {isAnalyzing ? "Đang phân tích..." : "AI Tự Phân Tích"}

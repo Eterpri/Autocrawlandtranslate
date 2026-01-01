@@ -6,7 +6,11 @@ import { StoryInfo, FileItem } from './utils/types';
 
 // Use process.env.API_KEY directly for initialization as per guidelines
 const getAiClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY;
+  if (!apiKey || apiKey.length < 30) {
+    throw new Error("Gemini API Key is missing or invalid. Please set the API_KEY environment variable in your deployment settings.");
+  }
+  return new GoogleGenAI({ apiKey });
 };
 
 const optimizeDictionary = (dictionary: string, content: string): string => {
