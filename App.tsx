@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { 
-  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand
+  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud
 } from 'lucide-react';
 import { FileItem, FileStatus, StoryProject, ReaderSettings } from './utils/types';
 import { DEFAULT_PROMPT, MODEL_CONFIGS, AVAILABLE_LANGUAGES, AVAILABLE_GENRES, AVAILABLE_PERSONALITIES, AVAILABLE_SETTINGS, AVAILABLE_FLOWS, DEFAULT_DICTIONARY } from './constants';
@@ -129,7 +129,6 @@ const App: React.FC = () => {
     const updateVoices = () => {
         if (!window.speechSynthesis) return;
         const voices = window.speechSynthesis.getVoices();
-        // Sắp xếp ưu tiên tiếng Việt lên đầu
         const sorted = [...voices].sort((a, b) => {
             if (a.lang.startsWith('vi') && !b.lang.startsWith('vi')) return -1;
             if (!a.lang.startsWith('vi') && b.lang.startsWith('vi')) return 1;
@@ -220,6 +219,40 @@ const App: React.FC = () => {
     addToast(`Đã thêm ${newChapters.length} chương`, "success");
   };
 
+  const mergeDictionaries = (base: string, newly: string): string => {
+    const parse = (str: string) => {
+        const map = new Map<string, string>();
+        str.split('\n').forEach(line => {
+            const l = line.trim();
+            if (!l || l.startsWith('#') || l.startsWith('//')) return;
+            const idx = l.indexOf('=');
+            if (idx === -1) return;
+            map.set(l.substring(0, idx).trim(), l.substring(idx + 1).trim());
+        });
+        return map;
+    };
+    const baseMap = parse(base);
+    const newMap = parse(newly);
+    newMap.forEach((v, k) => baseMap.set(k, v));
+    
+    let result = "# --- DICTIONARY MERGED ---\n";
+    baseMap.forEach((v, k) => {
+        result += `${k}=${v}\n`;
+    });
+    return result;
+  };
+
+  const handleDictionaryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!currentProject || !e.target.files?.length) return;
+      const file = e.target.files[0];
+      try {
+          const content = await file.text();
+          const merged = mergeDictionaries(currentProject.dictionary, content);
+          updateProject(currentProject.id, { dictionary: merged });
+          addToast("Đã hợp nhất từ điển mới!", "success");
+      } catch (err) { addToast("Lỗi đọc file từ điển", "error"); }
+  };
+
   const handleLinkCrawl = async (limitOverride?: number) => {
     if (!currentProject || isFetchingLinksRef.current) return;
     const startUrl = linkInput || currentProject.lastCrawlUrl;
@@ -257,9 +290,10 @@ const App: React.FC = () => {
                 lastModified: Date.now()
             } : p));
 
-            // TỰ ĐỘNG DỊCH: Nếu đang trong tiến trình dịch, đẩy luôn vào hàng đợi
-            if (isProcessing) {
+            // TỰ ĐỘNG DỊCH: Nếu bật Auto Dịch, đẩy luôn vào hàng đợi
+            if (isAutoCrawlEnabled) {
                 setProcessingQueue(prev => [...prev, chapterId]);
+                if (!isProcessing) setIsProcessing(true);
             }
 
             currentUrl = result.nextUrl || "";
@@ -291,7 +325,7 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${currentProject.info.title || 'Truyen-Dich'}.epub`;
+      a.download = `${currentProject.info.title || 'Novel'}.epub`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -321,7 +355,6 @@ const App: React.FC = () => {
         setProcessingQueue(prev => prev.slice(BATCH_FILE_LIMIT));
         setActiveWorkers(prev => prev + 1);
         
-        // Chuyển sang trạng thái "Đang dịch" trực quan
         setProjects(prev => prev.map(p => p.id === currentProjectId ? {
             ...p,
             chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.PROCESSING } : c)
@@ -345,11 +378,6 @@ const App: React.FC = () => {
                 }
                 return c;
             }) } : p));
-            
-            // Nếu có Auto Cào và đang dịch, tiếp tục cào chương mới
-            if (isAutoCrawlEnabled && !isFetchingLinksRef.current) {
-                handleLinkCrawl(2);
-            }
         } catch (e) {
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR } : c) } : p));
         } finally { setActiveWorkers(prev => prev - 1); }
@@ -371,14 +399,9 @@ const App: React.FC = () => {
 
   const playTTS = useCallback((startIndex: number = 0) => {
     if (!isReaderActiveRef.current || !viewingChapter?.translatedContent) { stopTTS(); return; }
-    
-    // Luôn hủy request cũ trước khi phát mới
     if (synthesisRef.current) synthesisRef.current.cancel();
-    
     const paragraphs = viewingChapter.translatedContent.split('\n').filter(p => p.trim().length > 0);
-    
     if (startIndex >= paragraphs.length) {
-        // Tự động chuyển chương khi đọc hết
         const currentIndex = sortedChapters.findIndex(c => c.id === viewingFileId);
         if (currentIndex < sortedChapters.length - 1) {
             const nextChapter = sortedChapters[currentIndex + 1];
@@ -387,31 +410,25 @@ const App: React.FC = () => {
                 setActiveTTSIndex(-1);
                 addToast("Chuyển chương tiếp theo...", "info");
             } else {
-                addToast("Chương tiếp theo chưa có bản dịch.", "warning");
+                addToast("Chương tiếp theo chưa dịch xong.", "warning");
                 stopTTS();
             }
         } else {
-            addToast("Đã đọc hết danh sách chương.", "success");
+            addToast("Đã đọc hết danh sách.", "success");
             stopTTS();
         }
         return;
     }
-
     const textToRead = paragraphs[startIndex].trim();
     setActiveTTSIndex(startIndex);
     const utterance = new SpeechSynthesisUtterance(textToRead);
     utterance.lang = 'vi-VN';
     utterance.rate = readerSettings.ttsRate || 1.1;
-    
-    // Gán Voice Object chính xác
     if (readerSettings.ttsVoice && synthesisRef.current) {
         const voices = synthesisRef.current.getVoices();
         const selectedVoice = voices.find(v => v.voiceURI === readerSettings.ttsVoice);
-        if (selectedVoice) {
-            utterance.voice = selectedVoice;
-        }
+        if (selectedVoice) utterance.voice = selectedVoice;
     }
-    
     utterance.onend = () => { if (isReaderActiveRef.current && !isTTSPaused) playTTS(startIndex + 1); };
     utterance.onerror = () => { if (isReaderActiveRef.current) stopTTS(); };
     synthesisRef.current?.speak(utterance);
@@ -441,10 +458,8 @@ const App: React.FC = () => {
 
   const handleVoiceChange = (voiceURI: string) => {
     setReaderSettings(prev => ({ ...prev, ttsVoice: voiceURI }));
-    // Hủy và khởi chạy lại ngay lập tức với giọng mới nếu đang ở trong Reader
     if (isReaderActiveRef.current && activeTTSIndex !== -1) {
-        stopTTS();
-        setTimeout(() => playTTS(activeTTSIndex), 100);
+        stopTTS(); setTimeout(() => playTTS(activeTTSIndex), 100);
     }
   };
 
@@ -553,9 +568,14 @@ const App: React.FC = () => {
                   <div className="px-8 py-6 border-b flex items-center justify-between">
                       <div className="flex items-center gap-3">
                           <Brain className="w-6 h-6 text-indigo-600" />
-                          <h3 className="font-bold text-xl">Thiết lập Bối cảnh (Bible)</h3>
+                          <h3 className="font-bold text-xl">Thiết lập Bối cảnh & Từ điển</h3>
                       </div>
                       <div className="flex items-center gap-3">
+                          <input type="file" id="dict-up" className="hidden" accept=".txt" onChange={handleDictionaryUpload} />
+                          <label htmlFor="dict-up" className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl font-bold text-sm cursor-pointer hover:bg-indigo-100 transition-all">
+                              <UploadCloud className="w-4 h-4" />
+                              Hợp nhất từ điển
+                          </label>
                           <button 
                             onClick={handleAIAnalyze} 
                             disabled={isAnalyzing}
@@ -570,12 +590,20 @@ const App: React.FC = () => {
                   <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
                       <div className="space-y-2">
                           <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Từ điển & Ghi chú (Glossary)</label>
-                          <p className="text-[11px] text-slate-400 italic mb-2">Gợi ý: Dùng tính năng AI Phân Tích để tự động trích xuất các xưng hô Ta - Ngươi, địa danh và cấp độ tu luyện.</p>
                           <textarea 
-                              placeholder="Dữ liệu phân tích AI sẽ xuất hiện tại đây..."
+                              placeholder="Dữ liệu từ điển (định dạng: từ gốc = từ dịch)..."
+                              value={currentProject.dictionary}
+                              onChange={e => updateProject(currentProject.id, { dictionary: e.target.value })}
+                              className="w-full h-96 p-5 rounded-2xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-400 font-mono text-sm leading-relaxed"
+                          />
+                      </div>
+                      <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Phân tích bối cảnh AI (Series Bible)</label>
+                          <textarea 
+                              placeholder="AI sẽ phân tích xưng hô và bối cảnh tại đây..."
                               value={currentProject.globalContext}
                               onChange={e => updateProject(currentProject.id, { globalContext: e.target.value })}
-                              className="w-full h-96 p-5 rounded-2xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-400 font-mono text-sm leading-relaxed"
+                              className="w-full h-64 p-5 rounded-2xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-400 font-mono text-sm leading-relaxed"
                           />
                       </div>
                   </div>
