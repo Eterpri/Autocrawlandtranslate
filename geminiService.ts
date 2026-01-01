@@ -1,9 +1,10 @@
 
 import { GoogleGenAI } from '@google/genai';
-import { quotaManager } from './utils/quotaManager.ts';
-import { MODEL_CONFIGS, GLOSSARY_ANALYSIS_PROMPT } from './constants.ts';
-import { StoryInfo, FileItem } from './types.ts';
+import { quotaManager } from './utils/quotaManager';
+import { MODEL_CONFIGS, GLOSSARY_ANALYSIS_PROMPT } from './constants';
+import { StoryInfo, FileItem } from './utils/types';
 
+// Use process.env.API_KEY directly for initialization as per guidelines
 const getAiClient = () => {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
@@ -38,20 +39,36 @@ const handleErrorQuota = (error: any, modelId: string) => {
 
 const selectModel = (allowedModelIds: string[]) => {
   const currentConfigs = quotaManager.getConfigs();
-  const priorityTier = ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash'];
+  const priorityTier = ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-latest'];
   const available = currentConfigs
     .filter(c => allowedModelIds.includes(c.id) && quotaManager.isModelAvailable(c.id))
-    .sort((a, b) => priorityTier.indexOf(a.id) - priorityTier.indexOf(b.id));
+    .sort((a, b) => {
+        const aIndex = priorityTier.indexOf(a.id);
+        const bIndex = priorityTier.indexOf(b.id);
+        
+        const aPrio = aIndex === -1 ? Infinity : aIndex;
+        const bPrio = bIndex === -1 ? Infinity : bIndex;
+
+        if (aPrio !== bPrio) {
+            return aPrio - bPrio;
+        }
+
+        return a.priority - b.priority;
+    });
 
   return available.map(m => m.id);
 }
 
 export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInfo): Promise<string> => {
     const ai = getAiClient();
+    // Ưu tiên Flash trên mobile để tránh timeout và tiết kiệm quota
     const modelsToTry = ['gemini-3-flash-preview', 'gemini-3-pro-preview'];
+    
+    // Lấy mẫu nội dung cực ngắn (1500 ký tự mỗi phần) để tránh crash trình duyệt mobile
     const sampleFiles = files.length > 3 ? [files[0], files[Math.floor(files.length/2)], files[files.length-1]] : files;
     let contextContent = sampleFiles.map(f => `--- ${f.name} ---\n${f.content.substring(0, 1500)}`).join('\n\n');
-    const userPrompt = `Phân tích cốt truyện cho truyện "${storyInfo.title}" từ nội dung mẫu:\n\n${contextContent}`;
+    
+    const userPrompt = `Phân tích cốt truyện, xưng hô và lập từ điển nhân vật cho truyện "${storyInfo.title}" từ nội dung mẫu sau:\n\n${contextContent}`;
 
     for (const modelId of modelsToTry) {
         if (!quotaManager.isModelAvailable(modelId)) continue;
@@ -59,8 +76,12 @@ export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInf
             const response = await ai.models.generateContent({
                 model: modelId,
                 contents: userPrompt,
-                config: { systemInstruction: GLOSSARY_ANALYSIS_PROMPT, temperature: 0.3 },
+                config: {
+                    systemInstruction: GLOSSARY_ANALYSIS_PROMPT,
+                    temperature: 0.3,
+                },
             });
+            // Accessing .text property as per guidelines
             if (response.text) {
                 quotaManager.recordRequest(modelId);
                 return response.text.trim();
@@ -69,7 +90,7 @@ export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInf
             handleErrorQuota(error, modelId);
         }
     }
-    throw new Error("AI không thể phản hồi lúc này.");
+    throw new Error("AI không thể phản hồi lúc này. Vui lòng thử lại sau hoặc tự điền bối cảnh.");
 };
 
 export const translateBatch = async (
@@ -88,23 +109,52 @@ export const translateBatch = async (
         inputContent += `\n[[[FILE_ID: ${file.id}]]]\n${file.content}\n[[[FILE_END: ${file.id}]]]\n`;
     }
 
-    const systemInstruction = `DỊCH SANG TIẾNG VIỆT MƯỢT MÀ, THUẦN VIỆT 100%. GIỮ NGUYÊN FILE_ID TAGS.`;
-    const fullPrompt = `[DICTIONARY]\n${relevantDictionary}\n\n[CONTEXT]\n${globalContext}\n\n[REQUIREMENTS]\n${userPrompt}\n\n[CONTENT]\n${inputContent}`;
+    const systemInstruction = `BẠN LÀ CHUYÊN GIA BIÊN TẬP VÀ DỊCH THUẬT TRUNG-VIỆT CAO CẤP.
+NHIỆM VỤ: Dịch nội dung được cung cấp sang tiếng Việt mượt mà, văn phong tiểu thuyết, thuần Việt 100%.
+
+QUY TẮC CỨNG:
+1. TUYỆT ĐỐI KHÔNG TRẢ VỀ TIẾNG TRUNG. Mọi từ ngữ phải được dịch hoặc để Hán Việt.
+2. KHÔNG LẶP LẠI NGUYÊN VĂN NỘI DUNG GỐC (Hán Việt thô/Tiếng Trung). Nếu model trả về tiếng Trung, đó là thất bại hoàn toàn.
+3. KHÔNG THÊM lời dẫn, lời chào, hay nhận xét cá nhân.
+4. GIỮ NGUYÊN TAGS: [[[FILE_ID: ID]]] và [[[FILE_END: ID]]] để hệ thống tách file.
+5. SỬ DỤNG TỪ ĐIỂN ĐỂ NHẤT QUÁN TÊN RIÊNG.
+6. Loại bỏ hoàn toàn các dòng rác (link web, quảng cáo lậu) nếu chúng vô tình lọt vào nội dung gốc.`;
+
+    const fullPrompt = `[DICTIONARY]\n${relevantDictionary}\n\n[STORY_CONTEXT]\n${globalContext}\n\n[USER_REQUIREMENTS]\n${userPrompt}\n\n[CONTENT_TO_TRANSLATE]\n${inputContent}`;
 
     const attempts = selectModel(allowedModelIds);
     for (const modelId of attempts) {
         try {
+            const isGemini3 = modelId.includes('gemini-3');
             const response = await ai.models.generateContent({
                 model: modelId,
                 contents: fullPrompt,
-                config: { systemInstruction, temperature: 0.2, maxOutputTokens: 60000 },
+                config: {
+                    systemInstruction,
+                    temperature: 0.2,
+                    maxOutputTokens: 60000,
+                    // Thinking Config is supported for Gemini 3 and 2.5 series
+                    ...(isGemini3 && modelId.includes('pro') ? { thinkingConfig: { thinkingBudget: 4000 } } : {})
+                },
             });
+
+            // Accessing .text property as per guidelines
             if (!response.text) continue;
+            
             const results = new Map<string, string>();
             for (const file of files) {
                 const regex = new RegExp(`\\[\\[\\[FILE_ID:\\s*${file.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\]\\]\\]([\\s\\S]*?)\\[\\[\\[FILE_END:\\s*${file.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\]\\]\\]`, 'i');
                 const match = response.text.match(regex);
-                if (match) results.set(file.id, match[1].trim());
+                if (match) {
+                    let translated = match[1].trim();
+                    translated = translated.split('\n').filter(line => {
+                        const hasVietnamese = /[a-zA-Záàảãạâấầẩẫậăắằẳẵặéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]/i.test(line);
+                        const hasChinese = /[\u4e00-\u9fa5]/.test(line);
+                        if (hasChinese && !hasVietnamese) return false;
+                        return true;
+                    }).join('\n');
+                    results.set(file.id, translated);
+                }
             }
             if (results.size > 0) {
                 quotaManager.recordRequest(modelId);
@@ -114,5 +164,5 @@ export const translateBatch = async (
             handleErrorQuota(error, modelId);
         }
     }
-    throw new Error("Dịch thất bại.");
+    throw new Error("Dịch thất bại trên mọi model hoặc model trả về sai định dạng.");
 };

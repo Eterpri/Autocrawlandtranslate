@@ -1,5 +1,5 @@
 
-import { ModelQuota, ModelUsage } from '../types';
+import { ModelQuota, ModelUsage } from './types';
 import { MODEL_CONFIGS } from '../constants';
 
 const STORAGE_KEY = 'gemini_quota_usage_v1';

@@ -1,6 +1,6 @@
 
 import JSZip from 'jszip';
-import { FileItem, FileStatus, StoryInfo } from '../types';
+import { FileItem, FileStatus, StoryInfo } from './types';
 
 const PROXY_LIST = [
     "https://api.allorigins.win/raw?url=",

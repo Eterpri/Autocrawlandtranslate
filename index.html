@@ -1,25 +1,17 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dịch & Biên Tập Truyện - AI Novel Pro</title>
+    <title>AI Novel Pro - Dịch & Biên Tập</title>
     
-    <!-- Fonts: Outfit for headings, Inter for body -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;700;800&display=swap" rel="stylesheet">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // Shim cho process.env để tránh lỗi ReferenceError trên trình duyệt
-      window.process = { 
-        env: { 
-          NODE_ENV: 'production',
-          API_KEY: '' // Sẽ được inject tự động nếu có
-        } 
-      };
+      window.process = { env: { NODE_ENV: 'production' } };
       
       tailwind.config = {
         theme: {
@@ -29,38 +21,14 @@
               display: ['Outfit', 'sans-serif'],
             },
             colors: {
-              sky: {
-                50: '#f0f9ff',
-                100: '#e0f2fe',
-                200: '#bae6fd',
-                300: '#7dd3fc',
-                400: '#38bdf8',
-                500: '#0ea5e9',
-                600: '#0284c7',
-                700: '#0369a1',
-                800: '#075985',
-                900: '#0c4a6e',
-              },
-            },
-            animation: {
-              'progress': 'progress 2s ease-in-out infinite',
-            },
-            keyframes: {
-              progress: {
-                '0%': { width: '0%', left: '0%' },
-                '50%': { width: '70%', left: '15%' },
-                '100%': { width: '0%', left: '100%' },
+              indigo: {
+                600: '#4f46e5',
+                700: '#4338ca',
               }
             }
           }
         }
       }
-
-      // Bắt lỗi runtime để dễ debug
-      window.onerror = function(msg, url, line, col, error) {
-        console.error("Global Error: ", msg, "\nAt: ", url, ":", line);
-        return false;
-      };
     </script>
     <style>
       body {
@@ -92,30 +60,29 @@
         width: 100%;
         height: 100%;
         z-index: -1;
-        background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2394a3b8' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2394a3b8' fill-opacity='0.08'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
       }
       
+      ::-webkit-scrollbar { width: 6px; }
+      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+
       .glass-panel {
         background: rgba(255, 255, 255, 0.7);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.6);
       }
-
-      .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-      .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
     </style>
     <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@19.0.0",
-    "react-dom": "https://esm.sh/react-dom@19.0.0",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "jszip": "https://esm.sh/jszip@3.10.1",
+    "react": "https://esm.sh/react@18.3.1",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1",
     "@google/genai": "https://esm.sh/@google/genai@1.31.0",
-    "lucide-react": "https://esm.sh/lucide-react@0.460.0",
+    "jszip": "https://esm.sh/jszip@3.10.1",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/"
   }

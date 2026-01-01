@@ -1,5 +1,5 @@
 
-import { ModelQuota } from './types';
+import { ModelQuota } from './utils/types';
 
 export const PROMPT_PRESETS = [
     {
@@ -1508,43 +1508,27 @@ export const MODEL_CONFIGS: ModelQuota[] = [
     maxOutputTokens: 65536
   },
   {
-    id: 'gemini-2.5-pro',
-    name: 'Gemini 2.5 Pro (Ổn định)',
-    rpmLimit: 2,
-    rpdLimit: 50,
-    priority: 2,
-    maxOutputTokens: 65536
-  },
-  {
     id: 'gemini-3-flash-preview',
     name: 'Gemini 3.0 Flash (Nhanh/Thông minh)',
     rpmLimit: 15,
     rpdLimit: 100, // Estimate
+    priority: 2,
+    maxOutputTokens: 65536
+  },
+  {
+    id: 'gemini-flash-latest',
+    name: 'Gemini Flash (Dự phòng/Sửa Raw)',
+    rpmLimit: 15,
+    rpdLimit: 100,
     priority: 3,
     maxOutputTokens: 65536
   },
   {
-    id: 'gemini-2.5-flash',
-    name: 'Gemini 2.5 Flash (Dự phòng/Sửa Raw)',
-    rpmLimit: 15,
-    rpdLimit: 100,
+    id: 'gemini-flash-lite-latest',
+    name: 'Gemini Flash Lite (Siêu nhẹ)',
+    rpmLimit: 30,
+    rpdLimit: 200,
     priority: 4,
-    maxOutputTokens: 65536
-  },
-  {
-    id: 'gemini-2.5-flash-lite',
-    name: 'Gemini 2.5 Flash-Lite',
-    rpmLimit: 30,
-    rpdLimit: 200,
-    priority: 5,
-    maxOutputTokens: 65536
-  },
-  {
-    id: 'gemini-2.0-flash',
-    name: 'Gemini 2.0 Flash (Sửa Raw Cuối)',
-    rpmLimit: 30,
-    rpdLimit: 200,
-    priority: 6,
     maxOutputTokens: 65536
   }
 ];
