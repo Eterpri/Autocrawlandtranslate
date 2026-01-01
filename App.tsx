@@ -59,7 +59,11 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-  const [isApiKeyReady, setIsApiKeyReady] = useState(false);
+  
+  // API Key Management State
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState<string>("");
+  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
 
   const [isWakeLockActive, setIsWakeLockActive] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
@@ -92,12 +96,25 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    // Check for API Key on mount
-    const apiKey = process.env.API_KEY;
-    if (apiKey && apiKey.length > 30) {
-      setIsApiKeyReady(true);
+    const savedKey = localStorage.getItem('gemini_api_key');
+    if (savedKey && savedKey.length > 30) {
+      setApiKey(savedKey);
+    } else {
+      setShowApiKeyModal(true);
     }
   }, []);
+
+  const handleSaveApiKey = () => {
+    const keyToSave = apiKeyInput.trim();
+    if (keyToSave.length < 30) {
+        addToast("API Key không hợp lệ. Vui lòng kiểm tra lại.", "error");
+        return;
+    }
+    localStorage.setItem('gemini_api_key', keyToSave);
+    setApiKey(keyToSave);
+    setShowApiKeyModal(false);
+    addToast("Đã lưu API Key thành công!", "success");
+  };
 
   const safeStr = (val: any): string => {
     if (val === null || val === undefined) return "";
@@ -162,10 +179,10 @@ const App: React.FC = () => {
   useEffect(() => { if (currentProject) persistProject(currentProject); }, [currentProject?.lastModified]);
 
   const handleAIAnalyze = async () => {
-    if (!currentProject || currentProject.chapters.length === 0) return addToast("Cần có ít nhất vài chương để phân tích", "warning");
+    if (!currentProject || currentProject.chapters.length === 0 || !apiKey) return addToast("Cần API Key và ít nhất vài chương để phân tích", "warning");
     setIsAnalyzing(true);
     try {
-        const result = await analyzeStoryContext(currentProject.chapters, currentProject.info);
+        const result = await analyzeStoryContext(currentProject.chapters, currentProject.info, apiKey);
         updateProject(currentProject.id, { globalContext: result });
         addToast("Đã hoàn thành phân tích bối cảnh AI!", "success");
     } catch (e: any) {
@@ -261,7 +278,6 @@ const App: React.FC = () => {
       } catch (err) { addToast("Lỗi đọc file từ điển", "error"); }
   };
 
-  // Nút cào link bây giờ chỉ nạp 1 chương đầu để làm mốc
   const handleLinkCrawl = async () => {
     if (!currentProject || isFetchingLinksRef.current) return;
     const startUrl = linkInput;
@@ -307,11 +323,9 @@ const App: React.FC = () => {
     }
   };
 
-  // Cơ chế Tự Động Cào Chương Tiếp Theo khi đang dịch
   useEffect(() => {
     if (!isProcessing || !currentProject || isFetchingLinksRef.current || !isAutoCrawlEnabled) return;
 
-    // Chỉ cào thêm nếu hàng đợi dịch sắp hết (dưới 2 chương)
     const idleChapters = currentProject.chapters.filter(c => c.status === FileStatus.IDLE || c.status === FileStatus.PROCESSING);
     if (idleChapters.length >= 2) return;
 
@@ -342,7 +356,6 @@ const App: React.FC = () => {
                 lastModified: Date.now()
             } : p));
 
-            // Tự động thêm vào queue dịch
             setProcessingQueue(prev => [...new Set([...prev, chapterId])]);
         } catch (e) {
             console.error("Auto-crawl failed", e);
@@ -352,7 +365,6 @@ const App: React.FC = () => {
         }
     };
 
-    // Delay 5s giữa các lần auto-fetch để an toàn cho IP
     const timer = setTimeout(autoFetch, 5000);
     return () => clearTimeout(timer);
   }, [isProcessing, currentProject?.chapters.length, currentProject?.lastCrawlUrl, isAutoCrawlEnabled, processingQueue.length]);
@@ -396,7 +408,7 @@ const App: React.FC = () => {
   }, [addToast]);
 
   useEffect(() => {
-    if (!isProcessing || processingQueue.length === 0 || activeWorkers >= MAX_CONCURRENCY || !currentProjectId) return;
+    if (!isProcessing || processingQueue.length === 0 || activeWorkers >= MAX_CONCURRENCY || !currentProjectId || !apiKey) return;
     const processBatch = async () => {
         const batchIds = processingQueue.slice(0, BATCH_FILE_LIMIT);
         setProcessingQueue(prev => prev.slice(BATCH_FILE_LIMIT));
@@ -411,7 +423,7 @@ const App: React.FC = () => {
             const targetProj = projects.find(p => p.id === currentProjectId);
             if (!targetProj) throw new Error("No project found");
             const prompt = replacePromptVariables(targetProj.promptTemplate, targetProj.info);
-            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id));
+            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id), apiKey);
             
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, lastModified: Date.now(), chapters: p.chapters.map(c => {
                 if (batchIds.includes(c.id)) {
@@ -431,7 +443,7 @@ const App: React.FC = () => {
         } finally { setActiveWorkers(prev => prev - 1); }
     };
     processBatch();
-  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, addToast]);
+  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, addToast, apiKey]);
 
   const sortedChapters = useMemo(() => {
     if (!currentProject) return [];
@@ -519,19 +531,31 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
-      {!isApiKeyReady && (
+      {showApiKeyModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-300">
             <div className="bg-white rounded-3xl w-full max-w-md m-4 p-8 text-center shadow-2xl">
                 <div className="w-16 h-16 bg-amber-100 text-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
                     <Key className="w-8 h-8" />
                 </div>
-                <h2 className="text-xl font-bold text-slate-800 mb-2">Cần Thiết Lập API Key</h2>
+                <h2 className="text-xl font-bold text-slate-800 mb-2">Nhập Google Gemini API Key</h2>
                 <p className="text-slate-500 text-sm mb-6">
-                    Ứng dụng này cần Google Gemini API Key để hoạt động. Vui lòng thiết lập biến môi trường <code className="bg-slate-100 text-slate-700 font-mono p-1 rounded-md text-xs">API_KEY</code> trong phần cài đặt của Vercel và deploy lại.
+                    Ứng dụng cần API Key để hoạt động. Key của bạn được lưu trữ an toàn ngay trên trình duyệt này và không được gửi đi bất cứ đâu.
                 </p>
-                <a href="https://vercel.com/docs/projects/environment-variables" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl shadow-lg active:scale-95 transition-all">
-                    <ExternalLink className="w-4 h-4" />
-                    Xem hướng dẫn của Vercel
+                <div className="space-y-4">
+                    <input 
+                        type="password"
+                        placeholder="Dán API Key của bạn vào đây"
+                        value={apiKeyInput}
+                        onChange={(e) => setApiKeyInput(e.target.value)}
+                        className="w-full text-center p-4 rounded-2xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-medium transition-all"
+                    />
+                    <button onClick={handleSaveApiKey} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-all">
+                        Lưu và Bắt đầu
+                    </button>
+                </div>
+                 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-xs text-slate-400 hover:text-indigo-600 mt-4">
+                    <ExternalLink className="w-3 h-3" />
+                    Lấy API Key tại Google AI Studio
                 </a>
             </div>
         </div>
@@ -563,12 +587,12 @@ const App: React.FC = () => {
             ))}
           </div>
           <div className="p-4 border-t border-slate-100 space-y-2">
+            <button onClick={() => setShowApiKeyModal(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-amber-700 hover:bg-amber-100 font-semibold transition-all"><Key className="w-5 h-5" />Đổi API Key</button>
             <button onClick={handleInstallClick} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-indigo-600 hover:bg-indigo-50 font-semibold transition-all"><Smartphone className="w-5 h-5" />Cài đặt APK/App</button>
             <button onClick={toggleWakeLock} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${isWakeLockActive ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}>
                 {isWakeLockActive ? <Sun className="w-5 h-5 animate-pulse" /> : <Moon className="w-5 h-5" />}
                 {isWakeLockActive ? "Đang giữ sáng" : "Giữ sáng màn hình"}
             </button>
-            <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-600 hover:bg-slate-100 font-semibold transition-all"><Settings className="w-5 h-5" />Cài đặt</button>
           </div>
         </div>
       </aside>
@@ -583,14 +607,14 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
                 <button 
                   onClick={() => setShowContextSetup(true)}
-                  disabled={!isApiKeyReady}
+                  disabled={!apiKey}
                   className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all flex items-center gap-2 font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed" title="Bối cảnh truyện">
                     <Brain className="w-5 h-5" />
                     <span className="hidden sm:inline">Bối cảnh</span>
                 </button>
                 <button 
                   onClick={() => isProcessing ? stopTranslation() : startTranslation(false)}
-                  disabled={!isApiKeyReady}
+                  disabled={!apiKey}
                   className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-2.5 px-5 rounded-xl text-sm shadow-lg active:scale-95 transition-all disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed`}>
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                     {isProcessing ? "Dừng dịch" : "Bắt đầu dịch"}
@@ -655,7 +679,7 @@ const App: React.FC = () => {
                           </label>
                           <button 
                             onClick={handleAIAnalyze} 
-                            disabled={isAnalyzing || !isApiKeyReady}
+                            disabled={isAnalyzing || !apiKey}
                             className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all ${isAnalyzing ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-inner' : 'bg-amber-50 text-amber-600 hover:bg-amber-100 shadow-sm'} disabled:opacity-50 disabled:cursor-not-allowed`}
                           >
                               {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand className="w-4 h-4" />}

@@ -4,11 +4,10 @@ import { quotaManager } from './utils/quotaManager';
 import { MODEL_CONFIGS, GLOSSARY_ANALYSIS_PROMPT } from './constants';
 import { StoryInfo, FileItem } from './utils/types';
 
-// Use process.env.API_KEY directly for initialization as per guidelines
-const getAiClient = () => {
-  const apiKey = process.env.API_KEY;
+// The function now accepts the API key as a parameter
+const getAiClient = (apiKey: string) => {
   if (!apiKey || apiKey.length < 30) {
-    throw new Error("Gemini API Key is missing or invalid. Please set the API_KEY environment variable in your deployment settings.");
+    throw new Error("Gemini API Key không hợp lệ. Vui lòng kiểm tra lại.");
   }
   return new GoogleGenAI({ apiKey });
 };
@@ -63,8 +62,8 @@ const selectModel = (allowedModelIds: string[]) => {
   return available.map(m => m.id);
 }
 
-export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInfo): Promise<string> => {
-    const ai = getAiClient();
+export const analyzeStoryContext = async (files: FileItem[], storyInfo: StoryInfo, apiKey: string): Promise<string> => {
+    const ai = getAiClient(apiKey);
     // Ưu tiên Flash trên mobile để tránh timeout và tiết kiệm quota
     const modelsToTry = ['gemini-3-flash-preview', 'gemini-3-pro-preview'];
     
@@ -102,9 +101,10 @@ export const translateBatch = async (
     userPrompt: string,
     dictionary: string,
     globalContext: string,
-    allowedModelIds: string[]
+    allowedModelIds: string[],
+    apiKey: string
 ): Promise<{ results: Map<string, string>, model: string }> => {
-    const ai = getAiClient();
+    const ai = getAiClient(apiKey);
     const combinedContent = files.map(f => f.content).join('\n');
     const relevantDictionary = optimizeDictionary(dictionary, combinedContent);
 
