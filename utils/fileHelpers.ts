@@ -9,14 +9,12 @@ const PROXY_LIST = [
     "https://thingproxy.freeboard.io/fetch/"
 ];
 
-// Các từ khóa rác phổ biến trong nội dung lậu cần loại bỏ
 const JUNK_PHRASES = [
     "重要声明", "本站", "版权归", "All rights reserved", "最新章节", "永久地址", 
     "网友发表", "来自搜索引擎", "本站立场无关", "www.", ".com", ".net", ".org",
     "点击下一页", "继续阅读", "顶点小说", "笔趣阁", "69书吧", "飘天文学"
 ];
 
-// Các selector phổ biến mà các trang truyện hay dùng để chứa nội dung
 const CONTENT_SELECTORS = [
     '#content', '#htmlContent', '#article', '#booktxt', '#chaptercontent', 
     '.content', '.showtxt', '.read-content', '.chapter-content', '.post-content',
@@ -26,8 +24,22 @@ const CONTENT_SELECTORS = [
 const NEXT_CHAPTER_KEYWORDS = ["下一章", "下一页", "下一节", "next chapter", "chương sau", "chương tiếp"];
 
 /**
- * Lấy nội dung và link chương tiếp theo từ URL
+ * Chuyển đổi tiêu đề chương thô (Trung/Anh) sang Tiếng Việt chuẩn
  */
+export const translateChapterTitle = (title: string): string => {
+  let clean = title.trim();
+  // Xử lý mẫu: 第1章, 第123章
+  clean = clean.replace(/第\s*(\d+)\s*[章話节回]/g, 'Chương $1');
+  // Xử lý mẫu: Chapter 1
+  clean = clean.replace(/Chapter\s*(\d+)/gi, 'Chương $1');
+  // Xử lý số Hán Việt cơ bản (nếu cần mở rộng có thể thêm map)
+  const hanVietMap: Record<string, string> = { '一': '1', '二': '2', '三': '3', '四': '4', '五': '5', '六': '6', '七': '7', '八': '8', '九': '9', '十': '10' };
+  clean = clean.replace(/第\s*([一二三四五六七八九十]+)\s*[章話节回]/g, (match, p1) => {
+    return `Chương ${hanVietMap[p1] || p1}`;
+  });
+  return clean;
+};
+
 export const fetchContentFromUrl = async (url: string): Promise<{ title: string, content: string, nextUrl: string | null }> => {
     let lastError = "";
     const cleanUrl = url.trim();
@@ -52,15 +64,13 @@ export const fetchContentFromUrl = async (url: string): Promise<{ title: string,
             let tempDecoder = new TextDecoder('utf-8');
             let tempHtml = tempDecoder.decode(buffer);
             
-            let finalHtml = tempHtml;
             if (tempHtml.toLowerCase().includes('charset=gbk') || tempHtml.toLowerCase().includes('charset=gb2312')) {
-                finalHtml = new TextDecoder('gbk').decode(buffer);
+                tempHtml = new TextDecoder('gbk').decode(buffer);
             }
 
             const parser = new DOMParser();
-            const doc = parser.parseFromString(finalHtml, 'text/html');
+            const doc = parser.parseFromString(tempHtml, 'text/html');
 
-            // 1. Tìm Link chương tiếp theo (Giữ nguyên logic cũ)
             let nextUrl: string | null = null;
             const allLinks = Array.from(doc.querySelectorAll('a'));
             for (const link of allLinks) {
@@ -79,25 +89,20 @@ export const fetchContentFromUrl = async (url: string): Promise<{ title: string,
                 }
             }
 
-            // 2. Trích xuất Tiêu đề (Lấy H1 hoặc Title dọn dẹp)
-            let title = doc.title?.split('_')[0].split('-')[0].trim() || "Chương mới";
+            let rawTitle = doc.title?.split('_')[0].split('-')[0].trim() || "Chương mới";
             const h1 = doc.querySelector('h1');
             if (h1 && (h1 as HTMLElement).innerText?.trim().length < 150) {
-                title = (h1 as HTMLElement).innerText.trim();
+                rawTitle = (h1 as HTMLElement).innerText.trim();
             }
+            const title = translateChapterTitle(rawTitle);
 
-            // 3. Dọn dẹp DOM rác
             const junkElements = ['script', 'style', 'iframe', 'ins', 'aside', 'header', 'footer', 'nav', '.ads', '#ads', '.app-download', '.bottom-link'];
             junkElements.forEach(s => doc.querySelectorAll(s).forEach(el => el.remove()));
 
-            // 4. Tìm container nội dung thông minh
             let target: HTMLElement | null = null;
-
-            // Cách A: Thử qua danh sách Selector ưu tiên
             for (const selector of CONTENT_SELECTORS) {
                 const found = doc.querySelector(selector);
                 if (found && found.textContent && found.textContent.trim().length > 200) {
-                    // Kiểm tra xem có chứa quá nhiều link không (nếu nhiều link thì thường là menu/list)
                     const linkCount = found.querySelectorAll('a').length;
                     if (linkCount < 10) {
                         target = found as HTMLElement;
@@ -106,71 +111,43 @@ export const fetchContentFromUrl = async (url: string): Promise<{ title: string,
                 }
             }
 
-            // Cách B: Nếu không tìm thấy bằng selector, dùng thuật toán Scoring
             if (!target) {
                 const potentialContainers = Array.from(doc.querySelectorAll('div, section'));
                 let maxScore = 0;
-
                 potentialContainers.forEach(container => {
                     const htmlEl = container as HTMLElement;
                     const text = htmlEl.innerText?.trim() || "";
                     if (text.length < 150) return;
-
-                    // Điểm cộng cho đoạn văn <p> và xuống dòng <br>
                     const pCount = htmlEl.querySelectorAll('p').length;
                     const brCount = htmlEl.querySelectorAll('br').length;
-                    
-                    // Điểm cộng cho độ dài text thực tế (trừ đi text của link)
                     let textLength = text.length;
                     htmlEl.querySelectorAll('a').forEach(a => textLength -= a.innerText.length);
-
-                    // Điểm trừ cho văn bản chứa từ khóa rác
                     let penalty = 0;
-                    JUNK_PHRASES.forEach(phrase => {
-                        if (text.includes(phrase)) penalty += 500;
-                    });
-
+                    JUNK_PHRASES.forEach(phrase => { if (text.includes(phrase)) penalty += 500; });
                     const score = (textLength * 1) + (pCount * 50) + (brCount * 20) - penalty;
-                    
-                    if (score > maxScore) {
-                        maxScore = score;
-                        target = htmlEl;
-                    }
+                    if (score > maxScore) { maxScore = score; target = htmlEl; }
                 });
             }
 
             const finalContainer = target || doc.body;
-            
-            // 5. Làm sạch văn bản trích xuất
             let lines: string[] = [];
-            
-            // Ưu tiên lấy theo <p> hoặc <br> nếu có cấu trúc rõ ràng
             const paragraphs = finalContainer.querySelectorAll('p');
             if (paragraphs.length > 5) {
                 lines = Array.from(paragraphs).map(p => (p as HTMLElement).innerText.trim());
             } else {
-                // Tách theo xuống dòng nếu là text thô
                 lines = finalContainer.innerText.split('\n').map(l => l.trim());
             }
 
-            // Lọc bỏ các dòng rác cuối cùng (máy in, copyright, trang chủ...)
             let cleanLines = lines.filter(line => {
                 if (line.length < 2) return false;
-                // Nếu dòng chứa trên 2 từ khóa rác, loại bỏ
                 const junkMatchCount = JUNK_PHRASES.filter(phrase => line.includes(phrase)).length;
                 return junkMatchCount < 2;
             });
 
-            // Nếu dòng đầu tiên hoặc cuối cùng quá ngắn hoặc chứa từ khóa rác đơn lẻ, bỏ qua
-            if (cleanLines.length > 0 && JUNK_PHRASES.some(p => cleanLines[0].includes(p))) cleanLines.shift();
-            if (cleanLines.length > 0 && JUNK_PHRASES.some(p => cleanLines[cleanLines.length-1].includes(p))) cleanLines.pop();
-
             const cleanText = cleanLines.join('\n\n').trim();
-
             if (cleanText.length < 100) continue;
 
             return { title, content: cleanText, nextUrl };
-
         } catch (e: any) {
             lastError = e.message;
         }
@@ -187,100 +164,10 @@ export const unzipFiles = async (file: File): Promise<FileItem[]> => {
     const zipEntry = loadedZip.files[relativePath];
     if (!zipEntry.dir && zipEntry.name.toLowerCase().endsWith('.txt')) {
       const content = await zipEntry.async('string');
-      files.push({ id: crypto.randomUUID(), name: zipEntry.name.split('/').pop() || zipEntry.name, content, translatedContent: null, status: FileStatus.IDLE, retryCount: 0, originalCharCount: content.length, remainingRawCharCount: 0 });
+      files.push({ id: crypto.randomUUID(), name: translateChapterTitle(zipEntry.name.split('/').pop() || zipEntry.name), content, translatedContent: null, status: FileStatus.IDLE, retryCount: 0, originalCharCount: content.length, remainingRawCharCount: 0 });
     }
   }
   return files;
-};
-
-export const parseDocx = async (file: File): Promise<string> => {
-    const zip = new JSZip();
-    const loadedZip = await zip.loadAsync(file);
-    const xmlContent = await loadedZip.file("word/document.xml")?.async("string");
-    if (!xmlContent) throw new Error("Invalid DOCX");
-    const xmlDoc = new DOMParser().parseFromString(xmlContent, "text/xml");
-    const paragraphs = xmlDoc.getElementsByTagName("w:p");
-    let fullText = "";
-    for (let i = 0; i < paragraphs.length; i++) {
-        const texts = paragraphs[i].getElementsByTagName("w:t");
-        for (let j = 0; j < texts.length; j++) fullText += texts[j].textContent;
-        fullText += "\n";
-    }
-    return fullText.trim();
-};
-
-export const splitContentByRegex = (content: string, customRegex?: string): FileItem[] => {
-    const regex = customRegex ? new RegExp(customRegex, 'im') : /(?:^|\n)(?:第[0-9零一二三四五六七八九十百千]+[章話節回].*?|Chapter\s+\d+.*?|Chương\s+\d+.*?|Hồi\s+\d+.*?|^\d+[\.．]\s.*?|^\d+話.*?)(?=\n|$)/im;
-    const lines = content.split('\n');
-    const files: FileItem[] = [];
-    let currentBuffer: string[] = [];
-    let currentTitle = "Phần mở đầu";
-    for (const line of lines) {
-        if (regex.test(line)) {
-            if (currentBuffer.length > 0) {
-                files.push({ id: crypto.randomUUID(), name: currentTitle.substring(0, 50), content: currentBuffer.join('\n').trim(), translatedContent: null, status: FileStatus.IDLE, retryCount: 0, originalCharCount: currentBuffer.join('\n').length, remainingRawCharCount: 0 });
-            }
-            currentTitle = line.trim();
-            currentBuffer = [line];
-        } else currentBuffer.push(line);
-    }
-    if (currentBuffer.length > 0) {
-         files.push({ id: crypto.randomUUID(), name: currentTitle.substring(0, 50), content: currentBuffer.join('\n').trim(), translatedContent: null, status: FileStatus.IDLE, retryCount: 0, originalCharCount: currentBuffer.join('\n').length, remainingRawCharCount: 0 });
-    }
-    return files;
-};
-
-export const splitContentByLength = (content: string, charLimit: number = 6000): FileItem[] => {
-    const cleanedContent = content.replace(/\n{3,}/g, '\n\n').trim();
-    const files: FileItem[] = [];
-    let currentIndex = 0;
-    let chapterCount = 1;
-    while (currentIndex < cleanedContent.length) {
-        let endIndex = Math.min(currentIndex + charLimit, cleanedContent.length);
-        const chunkText = cleanedContent.substring(currentIndex, endIndex).trim();
-        if (chunkText.length > 0) {
-             const title = `Chương ${chapterCount}`;
-             files.push({ id: crypto.randomUUID(), name: title, content: `${title}\n\n${chunkText}`, translatedContent: null, status: FileStatus.IDLE, retryCount: 0, originalCharCount: chunkText.length, remainingRawCharCount: 0 });
-            chapterCount++;
-        }
-        currentIndex = endIndex;
-    }
-    return files;
-};
-
-export const parseEpub = async (file: File): Promise<{ files: FileItem[], info: Partial<StoryInfo>, coverBlob: Blob | null }> => {
-  const zip = new JSZip();
-  const loadedZip = await zip.loadAsync(file);
-  const containerXml = await loadedZip.file("META-INF/container.xml")?.async("string");
-  const parser = new DOMParser();
-  const containerDoc = parser.parseFromString(containerXml!, "text/xml");
-  const opfPath = containerDoc.getElementsByTagName("rootfile")[0]?.getAttribute("full-path");
-  const opfContent = await loadedZip.file(opfPath!)?.async("string");
-  const opfDoc = parser.parseFromString(opfContent!, "text/xml");
-  const metadataTitle = opfDoc.getElementsByTagName("dc:title")[0]?.textContent || "";
-  const metadataAuthor = opfDoc.getElementsByTagName("dc:creator")[0]?.textContent || "";
-  const spineItems = opfDoc.getElementsByTagName("itemref");
-  const manifestItems = opfDoc.getElementsByTagName("item");
-  const manifest: Record<string, string> = {};
-  for (let i = 0; i < manifestItems.length; i++) {
-    const id = manifestItems[i].getAttribute("id");
-    const href = manifestItems[i].getAttribute("href");
-    if (id && href) manifest[id] = href;
-  }
-  const files: FileItem[] = [];
-  let chapterIndex = 1;
-  const opfDir = opfPath!.substring(0, opfPath!.lastIndexOf('/'));
-  for (let i = 0; i < spineItems.length; i++) {
-    const idref = spineItems[i].getAttribute("idref");
-    const fullPath = opfDir ? `${opfDir}/${manifest[idref!]}` : manifest[idref!];
-    const fileContent = await loadedZip.file(fullPath)?.async("string");
-    if (!fileContent) continue;
-    const htmlDoc = parser.parseFromString(fileContent, "text/html");
-    let rawText = htmlDoc.body ? (htmlDoc.body as HTMLElement).innerText : "";
-    if (rawText.trim().length < 50) continue;
-    files.push({ id: crypto.randomUUID(), name: `Chương ${chapterIndex++}`, content: rawText.trim(), translatedContent: null, status: FileStatus.IDLE, retryCount: 0, originalCharCount: rawText.length, remainingRawCharCount: 0 });
-  }
-  return { files, info: { title: metadataTitle, author: metadataAuthor }, coverBlob: null };
 };
 
 export const createMergedFile = (files: FileItem[]): string => {
@@ -288,18 +175,6 @@ export const createMergedFile = (files: FileItem[]): string => {
     .filter((f) => f.status === FileStatus.COMPLETED && f.translatedContent)
     .map((f) => f.translatedContent?.trim()) 
     .join('\n\n'); 
-};
-
-export const downloadRawAsZip = async (files: FileItem[], filename: string) => {
-    const zip = new JSZip();
-    [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-    .forEach(f => zip.file(`${f.name}.txt`, f.content));
-    const blob = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${filename}.zip`;
-    a.click();
 };
 
 export const downloadTextFile = (filename: string, content: string) => {
@@ -311,39 +186,86 @@ export const downloadTextFile = (filename: string, content: string) => {
   a.click();
 };
 
-export const downloadJsonFile = (filename: string, data: any) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-};
-
-export const readFileAsText = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => resolve(e.target?.result as string);
-    reader.onerror = (e) => reject(e);
-    reader.readAsText(file);
-  });
-};
-
-export const generateEpub = async (files: FileItem[], storyInfo: StoryInfo, coverImage: File | null): Promise<Blob> => {
+export const generateEpub = async (files: FileItem[], storyInfo: StoryInfo): Promise<Blob> => {
   const zip = new JSZip();
   const sortedFiles = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).filter(f => f.status === FileStatus.COMPLETED);
+  
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
   zip.folder("META-INF")?.file("container.xml", `<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`);
+  
   const oebps = zip.folder("OEBPS");
-  oebps?.file("Styles/style.css", `body { font-family: serif; line-height: 1.5; padding: 1em; } h2 { text-align: center; } p { text-indent: 1.5em; margin: 0.5em 0; }`);
-  let manifest = ""; let spine = "";
+  oebps?.file("Styles/style.css", `body { font-family: serif; line-height: 1.6; padding: 5%; color: #111; } h2 { text-align: center; margin-bottom: 2em; border-bottom: 1px solid #eee; padding-bottom: 0.5em; } p { text-indent: 1.5em; margin: 0.8em 0; text-align: justify; }`);
+  
+  let manifest = ""; 
+  let spine = "";
+  let navItems = "";
+
   sortedFiles.forEach((f, i) => {
-    const id = `ch${i}`;
-    const html = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${f.name}</title><link href="../Styles/style.css" rel="stylesheet" type="text/css"/></head><body><h2>${f.name}</h2>${(f.translatedContent || "").split('\n').map(l => `<p>${l}</p>`).join('')}</body></html>`;
-    oebps?.file(`Text/${id}.xhtml`, html);
-    manifest += `<item id="${id}" href="Text/${id}.xhtml" media-type="application/xhtml+xml"/>\n`;
+    const id = `ch${i + 1}`;
+    const fileName = `${id}.xhtml`;
+    const chapterTitle = f.name;
+    
+    const htmlContent = `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+  <title>${chapterTitle}</title>
+  <link href="../Styles/style.css" rel="stylesheet" type="text/css"/>
+</head>
+<body>
+  <section epub:type="chapter">
+    <h2>${chapterTitle}</h2>
+    ${(f.translatedContent || "").split('\n').filter(l => l.trim()).map(l => `<p>${l.trim()}</p>`).join('\n')}
+  </section>
+</body>
+</html>`;
+
+    oebps?.file(`Text/${fileName}`, htmlContent);
+    manifest += `<item id="${id}" href="Text/${fileName}" media-type="application/xhtml+xml"/>\n`;
     spine += `<itemref idref="${id}"/>\n`;
+    navItems += `<li><a href="Text/${fileName}">${chapterTitle}</a></li>\n`;
   });
-  oebps?.file("content.opf", `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${storyInfo.title}</dc:title><dc:creator>${storyInfo.author}</dc:creator><dc:language>vi</dc:language><dc:identifier id="id">uuid</dc:identifier></metadata><manifest>${manifest}</manifest><spine>${spine}</spine></package>`);
+
+  // TOC cho EPUB 3
+  const navHtml = `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+  <title>Mục lục</title>
+  <style>nav ol { list-style-type: none; padding-left: 0; } nav li { margin: 0.5em 0; } a { text-decoration: none; color: #333; }</style>
+</head>
+<body>
+  <nav epub:type="toc" id="toc">
+    <h1>Mục lục</h1>
+    <ol>
+      ${navItems}
+    </ol>
+  </nav>
+</body>
+</html>`;
+  oebps?.file("nav.xhtml", navHtml);
+
+  const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">uuid-${crypto.randomUUID()}</dc:identifier>
+    <dc:title>${storyInfo.title}</dc:title>
+    <dc:creator>${storyInfo.author || 'Vô danh'}</dc:creator>
+    <dc:language>vi</dc:language>
+    <meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, "Z")}</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="css" href="Styles/style.css" media-type="text/css"/>
+    ${manifest}
+  </manifest>
+  <spine>
+    <itemref idref="nav"/>
+    ${spine}
+  </spine>
+</package>`;
+
+  oebps?.file("content.opf", opf);
+
   return await zip.generateAsync({ type: "blob" });
 };
