@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { 
-  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud
+  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud, Smartphone
 } from 'lucide-react';
 import { FileItem, FileStatus, StoryProject, ReaderSettings } from './utils/types';
 import { DEFAULT_PROMPT, MODEL_CONFIGS, AVAILABLE_LANGUAGES, AVAILABLE_GENRES, AVAILABLE_PERSONALITIES, AVAILABLE_SETTINGS, AVAILABLE_FLOWS, DEFAULT_DICTIONARY } from './constants';
@@ -253,23 +253,68 @@ const App: React.FC = () => {
       } catch (err) { addToast("Lỗi đọc file từ điển", "error"); }
   };
 
-  const handleLinkCrawl = async (limitOverride?: number) => {
+  // Nút cào link bây giờ chỉ nạp 1 chương đầu để làm mốc
+  const handleLinkCrawl = async () => {
     if (!currentProject || isFetchingLinksRef.current) return;
-    const startUrl = linkInput || currentProject.lastCrawlUrl;
-    if (!startUrl) return;
+    const startUrl = linkInput;
+    if (!startUrl) {
+        addToast("Vui lòng nhập link để bắt đầu.", "warning");
+        return;
+    }
 
     isFetchingLinksRef.current = true;
     setIsFetchingLinks(true);
     setShowLinkModal(false);
 
-    let currentUrl = startUrl;
-    let count = 0;
-    const targetLimit = limitOverride || crawlLimit;
-
     try {
-        while (currentUrl && count < targetLimit) {
-            setFetchProgress({ current: count + 1, total: targetLimit });
-            const result = await fetchContentFromUrl(currentUrl);
+        setFetchProgress({ current: 1, total: 1 });
+        const result = await fetchContentFromUrl(startUrl);
+        const chapterId = generateId();
+        const newChapter: FileItem = { 
+            id: chapterId, 
+            name: translateChapterTitle(result.title), 
+            content: result.content, 
+            translatedContent: null, 
+            status: FileStatus.IDLE, 
+            retryCount: 0, 
+            originalCharCount: result.content.length, 
+            remainingRawCharCount: 0 
+        };
+        
+        setProjects(prev => prev.map(p => p.id === currentProject.id ? { 
+            ...p, 
+            chapters: [...p.chapters, newChapter], 
+            lastCrawlUrl: result.nextUrl || startUrl,
+            lastModified: Date.now()
+        } : p));
+
+        addToast(`Đã nạp chương đầu tiên. Hãy nhấn "Bắt đầu dịch" để kích hoạt Tự động cào.`, "success");
+    } catch (e: any) { 
+        addToast(`Cào link thất bại: ${e.message}`, "error"); 
+    } finally {
+        isFetchingLinksRef.current = false;
+        setIsFetchingLinks(false); 
+        setFetchProgress(null); 
+        setLinkInput("");
+    }
+  };
+
+  // Cơ chế Tự Động Cào Chương Tiếp Theo khi đang dịch
+  useEffect(() => {
+    if (!isProcessing || !currentProject || isFetchingLinksRef.current || !isAutoCrawlEnabled) return;
+
+    // Chỉ cào thêm nếu hàng đợi dịch sắp hết (dưới 2 chương)
+    const idleChapters = currentProject.chapters.filter(c => c.status === FileStatus.IDLE || c.status === FileStatus.PROCESSING);
+    if (idleChapters.length >= 2) return;
+
+    const nextUrl = currentProject.lastCrawlUrl;
+    if (!nextUrl) return;
+
+    const autoFetch = async () => {
+        isFetchingLinksRef.current = true;
+        setIsFetchingLinks(true);
+        try {
+            const result = await fetchContentFromUrl(nextUrl);
             const chapterId = generateId();
             const newChapter: FileItem = { 
                 id: chapterId, 
@@ -282,36 +327,27 @@ const App: React.FC = () => {
                 remainingRawCharCount: 0 
             };
             
-            // Cập nhật trạng thái project ngay lập tức
             setProjects(prev => prev.map(p => p.id === currentProject.id ? { 
                 ...p, 
                 chapters: [...p.chapters, newChapter], 
-                lastCrawlUrl: result.nextUrl || currentUrl,
+                lastCrawlUrl: result.nextUrl || nextUrl,
                 lastModified: Date.now()
             } : p));
 
-            // TỰ ĐỘNG DỊCH: Đẩy vào queue và kích hoạt isProcessing nếu enabled
-            if (isAutoCrawlEnabled) {
-                setProcessingQueue(prev => [...prev, chapterId]);
-                setIsProcessing(true);
-            }
-
-            currentUrl = result.nextUrl || "";
-            count++;
-            if (!currentUrl) break;
-            // Delay nhẹ để tránh bị block IP
-            await new Promise(r => setTimeout(r, 2000));
+            // Tự động thêm vào queue dịch
+            setProcessingQueue(prev => [...new Set([...prev, chapterId])]);
+        } catch (e) {
+            console.error("Auto-crawl failed", e);
+        } finally {
+            isFetchingLinksRef.current = false;
+            setIsFetchingLinks(false);
         }
-        if (count > 0) addToast(`Đã cào xong ${count} chương mới`, "success");
-    } catch (e: any) { 
-        addToast("Lỗi cào link: " + e.message, "error"); 
-    } finally {
-        isFetchingLinksRef.current = false;
-        setIsFetchingLinks(false); 
-        setFetchProgress(null); 
-        setLinkInput("");
-    }
-  };
+    };
+
+    // Delay 5s giữa các lần auto-fetch để an toàn cho IP
+    const timer = setTimeout(autoFetch, 5000);
+    return () => clearTimeout(timer);
+  }, [isProcessing, currentProject?.chapters.length, currentProject?.lastCrawlUrl, isAutoCrawlEnabled, processingQueue.length]);
 
   const handleExportEpub = useCallback(async () => {
     if (!currentProject) return;
@@ -340,10 +376,12 @@ const App: React.FC = () => {
   const startTranslation = useCallback((retryAll: boolean = false) => {
     if (!currentProject) return;
     const toProcess = currentProject.chapters.filter(c => retryAll ? true : (c.status === FileStatus.IDLE || c.status === FileStatus.ERROR)).map(c => c.id);
-    if (toProcess.length === 0) return addToast("Tất cả đã dịch xong", "info");
+    if (toProcess.length === 0 && !currentProject.lastCrawlUrl) return addToast("Tất cả đã dịch xong", "info");
+    
     setProcessingQueue(prev => [...new Set([...prev, ...toProcess])]);
     setIsProcessing(true);
-  }, [currentProject, addToast]);
+    addToast(isAutoCrawlEnabled ? "Đã bật chế độ Dịch & Cào tự động" : "Bắt đầu tiến trình dịch", "success");
+  }, [currentProject, addToast, isAutoCrawlEnabled]);
 
   const stopTranslation = useCallback(() => {
     setIsProcessing(false); setProcessingQueue([]); addToast("Đã dừng tiến trình dịch", "info");
@@ -466,6 +504,10 @@ const App: React.FC = () => {
 
   useEffect(() => { if (activeTTSIndex !== -1 && activeLineRef.current) activeLineRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, [activeTTSIndex]);
 
+  const handleInstallClick = () => {
+    addToast("Trên Android: Nhấn dấu 3 chấm Chrome -> 'Cài đặt ứng dụng' hoặc 'Thêm vào màn hình chính'", "info");
+  };
+
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
       <aside className={`fixed inset-y-0 left-0 z-50 w-72 glass-panel border-r border-slate-200 transition-transform duration-300 lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
@@ -494,6 +536,7 @@ const App: React.FC = () => {
             ))}
           </div>
           <div className="p-4 border-t border-slate-100 space-y-2">
+            <button onClick={handleInstallClick} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-indigo-600 hover:bg-indigo-50 font-semibold transition-all"><Smartphone className="w-5 h-5" />Cài đặt APK/App</button>
             <button onClick={toggleWakeLock} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${isWakeLockActive ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}>
                 {isWakeLockActive ? <Sun className="w-5 h-5 animate-pulse" /> : <Moon className="w-5 h-5" />}
                 {isWakeLockActive ? "Đang giữ sáng" : "Giữ sáng màn hình"}
@@ -562,7 +605,7 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* MODAL: Context Setup (Series Bible) */}
+      {/* MODAL: Context Setup */}
       {showContextSetup && currentProject && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
               <div className="bg-white rounded-[2.5rem] w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col text-slate-800 h-[85vh]">
@@ -705,17 +748,13 @@ const App: React.FC = () => {
                         <input type="text" placeholder="https://..." value={linkInput} onChange={(e) => setLinkInput(e.target.value)} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-medium transition-all" />
                       </div>
                       <div className="flex items-center justify-between px-1">
-                          <div className="flex items-center gap-3">
-                            <label className="text-sm font-bold text-slate-600">Giới hạn:</label>
-                            <input type="number" value={crawlLimit} onChange={(e) => setCrawlLimit(parseInt(e.target.value))} className="w-20 p-2.5 rounded-xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-400 text-center" />
-                          </div>
-                          <button onClick={() => setIsAutoCrawlEnabled(!isAutoCrawlEnabled)} className="flex items-center gap-2 group">
-                              <span className="text-sm font-bold text-slate-600">Auto Dịch ngay khi cào:</span>
+                          <button onClick={() => setIsAutoCrawlEnabled(!isAutoCrawlEnabled)} className="flex items-center gap-2 group w-full justify-between">
+                              <span className="text-sm font-bold text-slate-600">Dịch & Cào tự động (Khi nhấn nút Dịch):</span>
                               {isAutoCrawlEnabled ? <ToggleRight className="w-8 h-8 text-indigo-600" /> : <ToggleLeft className="w-8 h-8 text-slate-300" />}
                           </button>
                       </div>
                   </div>
-                  <div className="p-8 bg-slate-50 border-t flex gap-4"><button onClick={() => setShowLinkModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={() => handleLinkCrawl()} className="flex-[2] bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-all">Bắt đầu cào</button></div>
+                  <div className="p-8 bg-slate-50 border-t flex gap-4"><button onClick={() => setShowLinkModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={() => handleLinkCrawl()} className="flex-[2] bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-all">Nạp mốc chương</button></div>
               </div>
           </div>
       )}
@@ -746,8 +785,8 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div>
-                  <p className="font-bold text-sm text-slate-800">Đang cào tự động...</p>
-                  <p className="text-xs text-slate-400">{fetchProgress ? `Tiến độ: ${fetchProgress.current}/${fetchProgress.total}` : 'Đang dò link...'}</p>
+                  <p className="font-bold text-sm text-slate-800">Đang cào dữ liệu...</p>
+                  <p className="text-xs text-slate-400">{fetchProgress ? `Tiến độ: ${fetchProgress.current}/${fetchProgress.total}` : 'Chế độ tự động đang chạy...'}</p>
               </div>
           </div>
       )}
