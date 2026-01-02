@@ -6,7 +6,11 @@ import { StoryInfo, FileItem } from './utils/types';
 
 const CHUNK_SIZE_LIMIT = 3500; 
 
-// Initializing GoogleGenAI using process.env.API_KEY exclusively as per requirements
+/**
+ * Khởi tạo client AI. 
+ * Theo quy định, API Key được lấy trực tiếp từ process.env.API_KEY.
+ * Việc khởi tạo mới trong mỗi lần gọi giúp tránh race condition khi người dùng đổi key.
+ */
 const getAiClient = () => {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
@@ -84,8 +88,7 @@ const handleErrorQuota = (error: any, modelId: string) => {
 
 const selectModel = (allowedModelIds: string[]) => {
   const currentConfigs = quotaManager.getConfigs();
-  // Ưu tiên Gemini 2.5 Flash lên hàng đầu theo yêu cầu
-  const priorityTier = ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-latest'];
+  const priorityTier = ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-lite-latest'];
   const available = currentConfigs
     .filter(c => allowedModelIds.includes(c.id) && quotaManager.isModelAvailable(c.id))
     .sort((a, b) => {
@@ -124,7 +127,6 @@ export const translateBatch = async (
     globalContext: string,
     allowedModelIds: string[]
 ): Promise<{ results: Map<string, string>, model: string }> => {
-    // API key is handled internally via process.env.API_KEY
     const ai = getAiClient();
     const finalResults = new Map<string, string>();
     let lastUsedModel = "";
@@ -142,7 +144,6 @@ QUY TẮC BẮT BUỘC:
     for (const file of files) {
         const chunks = splitIntoChunks(file.content, CHUNK_SIZE_LIMIT);
         let translatedFullContent = "";
-        // Fix: corrected variable name declaration (removed space)
         const relevantDictionary = optimizeDictionary(dictionary, file.content);
 
         for (let i = 0; i < chunks.length; i++) {
@@ -166,7 +167,6 @@ QUY TẮC BẮT BUỘC:
                         },
                     });
 
-                    // Using .text property directly as per guidelines
                     const output = response.text || "";
                     const chineseMatches = output.match(/[\u4e00-\u9fa5]/g);
                     if (chineseMatches && chineseMatches.length > output.length * 0.3) {
@@ -179,10 +179,14 @@ QUY TẮC BẮT BUỘC:
                     chunkSuccess = true;
                     break; 
                 } catch (error: any) {
+                    const errorMsg = error.message || "";
+                    if (errorMsg.includes("Requested entity was not found")) {
+                        console.error("Model không tồn tại hoặc Key không có quyền. Vui lòng kiểm tra lại thiết lập API Key.");
+                    }
                     handleErrorQuota(error, modelId);
                 }
             }
-            if (!chunkSuccess) throw new Error(`Không thể dịch chương ${file.name} sau nhiều lần thử.`);
+            if (!chunkSuccess) throw new Error(`Không thể dịch chương ${file.name} sau nhiều lần thử. Vui lòng kiểm tra lại API Key.`);
         }
         
         const finalCleaned = cleanupTranslatedText(translatedFullContent, file.name);
@@ -196,7 +200,6 @@ export const analyzeStoryContext = async (
     chapters: FileItem[],
     storyInfo: StoryInfo
 ): Promise<string> => {
-    // API key is handled internally via process.env.API_KEY
     const ai = getAiClient();
     const sampleText = chapters
         .slice(0, 3)
@@ -222,7 +225,6 @@ ${sampleText}`;
             config: { temperature: 0.2 },
         });
 
-        // Using .text property directly as per guidelines
         if (!response.text) return "";
         quotaManager.recordRequest(modelId);
         return response.text.trim();

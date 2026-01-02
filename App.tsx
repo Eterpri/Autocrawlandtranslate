@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { 
-  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud, Smartphone, Maximize2, Minimize2, MoreHorizontal, FileSearch, PlayCircle
+  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud, Smartphone, Maximize2, Minimize2, MoreHorizontal, FileSearch, PlayCircle, ShieldCheck
 } from 'lucide-react';
 import { FileItem, FileStatus, StoryProject, ReaderSettings } from './utils/types';
 import { DEFAULT_PROMPT, MODEL_CONFIGS, AVAILABLE_LANGUAGES, AVAILABLE_GENRES, AVAILABLE_PERSONALITIES, AVAILABLE_SETTINGS, AVAILABLE_FLOWS, DEFAULT_DICTIONARY } from './constants';
@@ -10,6 +10,19 @@ import { createMergedFile, downloadTextFile, fetchContentFromUrl, unzipFiles, ge
 import { replacePromptVariables } from './utils/textHelpers';
 import { saveProject, getAllProjects, deleteProject } from './utils/storage';
 import { quotaManager } from './utils/quotaManager';
+
+// Khai báo kiểu cho window.aistudio
+// Cần định nghĩa interface AIStudio riêng và sử dụng trong Window với modifier readonly để khớp với môi trường thực thi
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey(): Promise<boolean>;
+    openSelectKey(): Promise<void>;
+  }
+
+  interface Window {
+    readonly aistudio: AIStudio;
+  }
+}
 
 const MAX_CONCURRENCY = 1; 
 const BATCH_FILE_LIMIT = 1;
@@ -58,7 +71,8 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   
-  // Removed API key local states and UI management as per mandatory guidelines
+  // Trạng thái API Key
+  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
 
   const [isWakeLockActive, setIsWakeLockActive] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
@@ -98,6 +112,28 @@ const App: React.FC = () => {
   const [newProjectInfo, setNewProjectInfo] = useState({
       title: '', author: '', languages: ['Convert thô'], genres: ['Tiên Hiệp'], mcPersonality: ['Trầm ổn/Già dặn'], worldSetting: ['Trung Cổ/Cổ Đại'], sectFlow: ['Phàm nhân lưu']
   });
+
+  // Kiểm tra API Key khi khởi động
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(hasKey);
+      }
+    };
+    checkKey();
+    const interval = setInterval(checkKey, 5000); // Check periodically
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // Sau khi mở hộp thoại, ta giả định người dùng sẽ chọn/đã chọn thành công
+      setHasApiKey(true);
+      addToast("Đã mở trình quản lý API Key. Vui lòng chọn một khóa có hiệu lực.", "info");
+    }
+  };
 
   useEffect(() => {
     const ua = navigator.userAgent;
@@ -158,7 +194,6 @@ const App: React.FC = () => {
     if (!currentProject) return;
     setIsAnalyzing(true);
     try {
-        // analyzeStoryContext internally uses process.env.API_KEY
         const result = await analyzeStoryContext(currentProject.chapters, currentProject.info);
         updateProject(currentProject.id, { globalContext: result });
         addToast("Phân tích AI hoàn tất!", "success");
@@ -325,7 +360,6 @@ const App: React.FC = () => {
             const targetProj = projects.find(p => p.id === currentProjectId);
             if (!targetProj) return;
             const prompt = replacePromptVariables(targetProj.promptTemplate, targetProj.info);
-            // translateBatch internally uses process.env.API_KEY
             const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)).map(c => ({ id: c.id, content: c.content, name: c.name })), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id));
             
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, lastModified: Date.now(), chapters: p.chapters.map(c => {
@@ -497,6 +531,14 @@ const App: React.FC = () => {
             ))}
           </div>
           <div className="p-6 border-t border-slate-100 space-y-3">
+            {/* Nút Đổi API Key */}
+            <button 
+              onClick={handleSelectKey} 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${hasApiKey ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-amber-50 text-amber-700 border border-amber-100'}`}
+            >
+              {hasApiKey ? <ShieldCheck className="w-5 h-5" /> : <Key className="w-5 h-5" />}
+              {hasApiKey ? "API Key Sẵn Sàng" : "Thiết lập API Key"}
+            </button>
             <button onClick={toggleWakeLock} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${isWakeLockActive ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}>{isWakeLockActive ? <Sun className="w-5 h-5 animate-pulse" /> : <Moon className="w-5 h-5" />}{isWakeLockActive ? "Đang giữ sáng" : "Giữ sáng màn hình"}</button>
           </div>
         </div>
@@ -527,6 +569,17 @@ const App: React.FC = () => {
                         <button onClick={handleExportEpub} className="flex items-center gap-2 bg-indigo-600 text-white p-3 rounded-2xl hover:bg-indigo-700 font-bold transition-all"><BookOpen className="w-5 h-5" />EPUB</button>
                     </div>
                 </div>
+                {!hasApiKey && (
+                  <div className="bg-amber-50 border border-amber-200 p-6 rounded-[2rem] flex flex-col sm:flex-row items-center gap-6 shadow-sm">
+                    <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center text-amber-600 shrink-0"><AlertTriangle className="w-7 h-7" /></div>
+                    <div className="flex-1 text-center sm:text-left">
+                      <h4 className="font-bold text-amber-900">Chưa cấu hình API Key</h4>
+                      <p className="text-sm text-amber-700">Bạn cần thiết lập API Key từ Google Cloud dự án trả phí để bắt đầu dịch thuật.</p>
+                      <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-600 underline mt-1 inline-block">Xem hướng dẫn Billing</a>
+                    </div>
+                    <button onClick={handleSelectKey} className="bg-amber-600 text-white font-bold py-3 px-6 rounded-2xl shadow-lg active:scale-95 transition-all">Thiết lập ngay</button>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {sortedChapters.map((ch) => {
                         const { label, color } = getStatusLabel(ch.status);
