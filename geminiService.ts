@@ -7,16 +7,16 @@ import { StoryInfo, FileItem } from './utils/types';
 const CHUNK_SIZE_LIMIT = 3500; 
 
 /**
- * Khởi tạo client AI. 
- * Ưu tiên khóa người dùng nhập vào (CUSTOM_GEMINI_API_KEY) để linh hoạt,
- * sau đó mới đến khóa hệ thống (process.env.API_KEY).
+ * Khởi tạo client AI với phím bảo mật mới nhất.
  */
 const getAiClient = () => {
+  // Ưu tiên 1: Key do người dùng nhập thủ công trong Settings
   const customKey = localStorage.getItem('CUSTOM_GEMINI_API_KEY');
-  const apiKey = customKey || process.env.API_KEY;
+  // Ưu tiên 2: Key từ môi trường hệ thống (nếu có)
+  const apiKey = (customKey && customKey.trim() !== '') ? customKey.trim() : process.env.API_KEY;
   
   if (!apiKey) {
-    throw new Error("Chưa cấu hình API Key. Vui lòng vào phần Cài đặt để thiết lập.");
+    throw new Error("Chưa cấu hình API Key. Vui lòng mở 'Cài đặt' và dán Key từ Google AI Studio.");
   }
   
   return new GoogleGenAI({ apiKey });
@@ -188,12 +188,12 @@ QUY TẮC BẮT BUỘC:
                 } catch (error: any) {
                     const errorMsg = (error.message || "").toLowerCase();
                     if (errorMsg.includes("requested entity was not found") || errorMsg.includes("404")) {
-                        console.error("Lỗi: Model không tồn tại hoặc Key không hợp lệ với model này.");
+                        console.error("Lỗi API Key hoặc Model. Vui lòng kiểm tra lại Key.");
                     }
                     handleErrorQuota(error, modelId);
                 }
             }
-            if (!chunkSuccess) throw new Error(`Không thể dịch chương ${file.name}. Có thể API Key hết hạn hoặc sai model. Vui lòng kiểm tra Cài đặt.`);
+            if (!chunkSuccess) throw new Error(`Không thể dịch chương ${file.name}. Vui lòng kiểm tra API Key trong mục Cài đặt.`);
         }
         
         const finalCleaned = cleanupTranslatedText(translatedFullContent, file.name);

@@ -11,11 +11,6 @@ import { replacePromptVariables } from './utils/textHelpers';
 import { saveProject, getAllProjects, deleteProject } from './utils/storage';
 import { quotaManager } from './utils/quotaManager';
 
-// The following declarations were removed because they collided with types already provided by the environment:
-// - interface AIStudio { hasSelectedApiKey(): Promise<boolean>; openSelectKey(): Promise<void>; }
-// - interface Window { readonly aistudio: AIStudio; }
-// We use @ts-ignore for usages of window.aistudio to ensure compatibility if types are not perfectly matched.
-
 const MAX_CONCURRENCY = 1; 
 const BATCH_FILE_LIMIT = 1;
 
@@ -64,9 +59,9 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   
-  // Quản lý API Key thủ công
-  const [customApiKey, setCustomApiKey] = useState<string>(localStorage.getItem('CUSTOM_GEMINI_API_KEY') || '');
-  const [hasSystemApiKey, setHasSystemApiKey] = useState<boolean>(false);
+  // API Key state
+  const [apiKeyInput, setApiKeyInput] = useState<string>(localStorage.getItem('CUSTOM_GEMINI_API_KEY') || '');
+  const [hasEffectiveKey, setHasEffectiveKey] = useState<boolean>(false);
 
   const [isWakeLockActive, setIsWakeLockActive] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
@@ -107,47 +102,26 @@ const App: React.FC = () => {
       title: '', author: '', languages: ['Convert thô'], genres: ['Tiên Hiệp'], mcPersonality: ['Trầm ổn/Già dặn'], worldSetting: ['Trung Cổ/Cổ Đại'], sectFlow: ['Phàm nhân lưu']
   });
 
-  // Kiểm tra API Key khi khởi động
+  // Kiểm tra phím bảo mật định kỳ
   useEffect(() => {
     const checkKey = async () => {
+      const custom = localStorage.getItem('CUSTOM_GEMINI_API_KEY');
       // @ts-ignore
-      if (window.aistudio) {
-        try {
-          // @ts-ignore
-          const hasKey = await window.aistudio.hasSelectedApiKey();
-          setHasSystemApiKey(hasKey);
-        } catch (e) {
-          console.error("Error checking system API key:", e);
-        }
-      }
+      const system = window.aistudio ? await window.aistudio.hasSelectedApiKey() : !!process.env.API_KEY;
+      setHasEffectiveKey(!!(custom && custom.trim() !== '') || system);
     };
     checkKey();
-    const interval = setInterval(checkKey, 5000); 
-    return () => clearInterval(interval);
+    const inv = setInterval(checkKey, 3000);
+    return () => clearInterval(inv);
   }, []);
 
-  const saveCustomApiKey = (key: string) => {
-    const trimmedKey = key.trim();
-    setCustomApiKey(trimmedKey);
-    localStorage.setItem('CUSTOM_GEMINI_API_KEY', trimmedKey);
-    addToast("Đã lưu API Key mới", "success");
+  const saveApiKey = () => {
+    const trimmed = apiKeyInput.trim();
+    localStorage.setItem('CUSTOM_GEMINI_API_KEY', trimmed);
+    setApiKeyInput(trimmed);
+    addToast("Đã lưu API Key thành công!", "success");
+    setShowSettings(false);
   };
-
-  const handleSelectSystemKey = async () => {
-    // @ts-ignore
-    if (window.aistudio) {
-      try {
-        // @ts-ignore
-        await window.aistudio.openSelectKey();
-        setHasSystemApiKey(true);
-        addToast("Đã kết nối với API Key hệ thống", "info");
-      } catch (e) {
-        console.error("Error opening key selector:", e);
-      }
-    }
-  };
-
-  const effectiveApiKey = customApiKey || (hasSystemApiKey ? 'System' : '');
 
   useEffect(() => {
     const ua = navigator.userAgent;
@@ -547,10 +521,10 @@ const App: React.FC = () => {
           <div className="p-6 border-t border-slate-100 space-y-3">
             <button 
               onClick={() => setShowSettings(true)} 
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${effectiveApiKey ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${hasEffectiveKey ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-600 border border-rose-100'}`}
             >
-              <Settings className="w-5 h-5" />
-              Cấu hình API Key
+              {hasEffectiveKey ? <ShieldCheck className="w-5 h-5 text-emerald-600" /> : <Key className="w-5 h-5 text-rose-500" />}
+              {hasEffectiveKey ? "API Key: Sẵn Sàng" : "Chưa Thiết Lập Key"}
             </button>
             <button onClick={toggleWakeLock} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${isWakeLockActive ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}>{isWakeLockActive ? <Sun className="w-5 h-5 animate-pulse" /> : <Moon className="w-5 h-5" />}{isWakeLockActive ? "Đang giữ sáng" : "Giữ sáng màn hình"}</button>
           </div>
@@ -582,14 +556,14 @@ const App: React.FC = () => {
                         <button onClick={handleExportEpub} className="flex items-center gap-2 bg-indigo-600 text-white p-3 rounded-2xl hover:bg-indigo-700 font-bold transition-all"><BookOpen className="w-5 h-5" />EPUB</button>
                     </div>
                 </div>
-                {!effectiveApiKey && (
-                  <div className="bg-amber-50 border border-amber-200 p-6 rounded-[2rem] flex flex-col sm:flex-row items-center gap-6 shadow-sm">
-                    <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center text-amber-600 shrink-0"><AlertTriangle className="w-7 h-7" /></div>
+                {!hasEffectiveKey && (
+                  <div className="bg-rose-50 border border-rose-200 p-6 rounded-[2rem] flex flex-col sm:flex-row items-center gap-6 shadow-sm">
+                    <div className="w-12 h-12 bg-rose-100 rounded-2xl flex items-center justify-center text-rose-600 shrink-0"><AlertTriangle className="w-7 h-7" /></div>
                     <div className="flex-1 text-center sm:text-left">
-                      <h4 className="font-bold text-amber-900">Thiếu API Key</h4>
-                      <p className="text-sm text-amber-700">Dịch thuật yêu cầu API Key từ Gemini. Bạn có thể lấy miễn phí tại Google AI Studio.</p>
+                      <h4 className="font-bold text-rose-900 text-lg">Thiếu Phím Bảo Mật (API Key)</h4>
+                      <p className="text-sm text-rose-700">Ứng dụng không thể dịch thuật nếu thiếu Key. Vui lòng lấy Key miễn phí từ Google.</p>
                     </div>
-                    <button onClick={() => setShowSettings(true)} className="bg-amber-600 text-white font-bold py-3 px-6 rounded-2xl shadow-lg active:scale-95 transition-all">Cấu hình ngay</button>
+                    <button onClick={() => setShowSettings(true)} className="bg-rose-600 text-white font-bold py-3 px-8 rounded-2xl shadow-lg active:scale-95 transition-all">Thiết Lập Ngay</button>
                   </div>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -619,64 +593,82 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Modal Cài đặt API Key */}
+      {/* Modal Cài đặt API Key - Thiết kế đơn giản & Tập trung */}
       {showSettings && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white rounded-[3rem] w-full max-w-xl p-10 shadow-2xl space-y-8 animate-in zoom-in-95 duration-300">
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+          <div className="bg-white rounded-[3rem] w-full max-w-xl p-12 shadow-premium space-y-8 animate-in zoom-in-95 duration-300 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
+            
             <div className="flex items-center justify-between">
-              <h3 className="font-bold text-2xl font-display text-slate-800">Cấu hình Gemini</h3>
-              <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-full transition-all text-slate-400"><X className="w-6 h-6" /></button>
+              <div>
+                <h3 className="font-bold text-2xl font-display text-slate-800">Cài đặt API Key</h3>
+                <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-widest">NovelPro v5.0 - Gemini 2.5 Flash</p>
+              </div>
+              <button onClick={() => setShowSettings(false)} className="p-3 hover:bg-slate-100 rounded-2xl transition-all text-slate-400"><X className="w-6 h-6" /></button>
             </div>
             
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-600 px-1 flex items-center justify-between">
-                  Gemini API Key
-                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-600 flex items-center gap-1 hover:underline">
-                    Lấy key tại đây <ExternalLink className="w-3 h-3" />
+            <div className="space-y-8">
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-slate-700 flex items-center justify-between px-1">
+                  Nhập Gemini API Key
+                  <a 
+                    href="https://aistudio.google.com/app/apikey" 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className="text-xs font-bold text-indigo-600 flex items-center gap-1.5 hover:underline bg-indigo-50 px-3 py-1.5 rounded-xl border border-indigo-100 transition-all"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> Lấy Key MIỄN PHÍ
                   </a>
                 </label>
-                <div className="relative group">
+                
+                <div className="relative">
                   <input 
                     type="password" 
-                    placeholder="Dán API Key của bạn vào đây..." 
-                    value={customApiKey}
-                    onChange={(e) => setCustomApiKey(e.target.value)}
-                    className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-mono text-sm transition-all"
+                    placeholder="Dán Key của bạn tại đây (AIza...)" 
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    className="w-full p-6 rounded-[1.5rem] bg-slate-50 border-2 border-slate-100 focus:border-indigo-500 outline-none font-mono text-sm transition-all shadow-inner"
                   />
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 group-hover:text-slate-400">
-                    <Key className="w-5 h-5" />
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-300">
+                    <Key className="w-6 h-6" />
                   </div>
                 </div>
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest px-1">Khóa sẽ được lưu cục bộ trên thiết bị của bạn.</p>
+                <div className="flex items-center gap-2 px-1">
+                  <Info className="w-3.5 h-3.5 text-slate-400" />
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">Key này sẽ được ưu tiên sử dụng. Dữ liệu được lưu an toàn trong trình duyệt của bạn.</p>
+                </div>
               </div>
 
-              <div className="h-px bg-slate-100"></div>
-
-              <div className="flex items-center justify-between p-5 bg-indigo-50/50 rounded-[1.5rem] border border-indigo-100">
+              {/* Tùy chọn Key hệ thống (Dành cho môi trường Studio) */}
+              <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-200">
                 <div className="flex items-center gap-4">
-                  <div className="p-3 bg-white rounded-xl shadow-sm"><ShieldCheck className="w-6 h-6 text-indigo-600" /></div>
+                  <div className="p-3 bg-white rounded-xl shadow-sm border border-slate-100"><ShieldCheck className="w-6 h-6 text-indigo-600" /></div>
                   <div>
                     <p className="text-sm font-bold text-slate-800">Key Hệ Thống</p>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{hasSystemApiKey ? 'Đã kết nối' : 'Chưa thiết lập'}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Sử dụng phím bảo mật chung</p>
                   </div>
                 </div>
                 <button 
-                  onClick={handleSelectSystemKey}
-                  className="px-4 py-2 bg-white text-indigo-600 font-bold text-xs rounded-xl border border-indigo-200 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                  onClick={async () => {
+                    // @ts-ignore
+                    if (window.aistudio) await window.aistudio.openSelectKey();
+                    setShowSettings(false);
+                    addToast("Đang kết nối Key hệ thống...", "info");
+                  }}
+                  className="px-5 py-2.5 bg-white text-slate-700 font-bold text-xs rounded-xl border border-slate-200 hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all shadow-sm active:scale-95"
                 >
-                  {hasSystemApiKey ? 'Đổi Key' : 'Kết nối'}
+                  Chọn Phím
                 </button>
               </div>
             </div>
 
             <div className="flex gap-4 pt-4">
-              <button onClick={() => setShowSettings(false)} className="flex-1 font-bold text-slate-400">Đóng</button>
+              <button onClick={() => setShowSettings(false)} className="flex-1 font-bold text-slate-400 hover:text-slate-600 transition-all">Hủy</button>
               <button 
-                onClick={() => { saveCustomApiKey(customApiKey); setShowSettings(false); }} 
-                className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2"
+                onClick={saveApiKey} 
+                className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-3"
               >
-                <Save className="w-5 h-5" /> Lưu cấu hình
+                <Save className="w-5 h-5" /> Lưu Cấu Hình
               </button>
             </div>
           </div>
