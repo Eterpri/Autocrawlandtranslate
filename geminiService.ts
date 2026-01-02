@@ -4,7 +4,7 @@ import { quotaManager } from './utils/quotaManager';
 import { MODEL_CONFIGS, GLOSSARY_ANALYSIS_PROMPT } from './constants';
 import { StoryInfo, FileItem } from './utils/types';
 
-const CHUNK_SIZE_LIMIT = 4000; // Tăng lên một chút để giảm số lần gọi API
+const CHUNK_SIZE_LIMIT = 4000; 
 const MAX_RETRY_ATTEMPTS = 3;
 
 /**
@@ -62,16 +62,20 @@ export const translateBatch = async (
     const finalResults = new Map<string, string>();
     let lastUsedModel = "";
 
+    // Instruction tăng cường cho tiêu đề
     const systemInstruction = `BẠN LÀ CHUYÊN GIA DỊCH THUẬT VĂN HỌC TRUNG-VIỆT.
 NHIỆM VỤ: Dịch đầy đủ nội dung, giữ nguyên phong cách, áp dụng từ điển. 
-KHÔNG Tóm tắt, KHÔNG bỏ sót.`;
+
+QUY TẮC BẮT BUỘC:
+1. DÒNG ĐẦU TIÊN của bản dịch PHẢI là Tiêu đề chương đã dịch (VD: Chương 123: Tiêu đề).
+2. Toàn bộ nội dung còn lại dịch sát nghĩa, mượt mà, thuần Việt.
+3. KHÔNG Tóm tắt, KHÔNG bỏ sót bất kỳ đoạn nào.`;
 
     for (const file of files) {
         const paragraphs = file.content.split('\n').filter(p => p.trim());
         let translatedFullContent = "";
         const relevantDictionary = optimizeDictionary(dictionary, file.content);
 
-        // Chia nhỏ chương thành các phần để dịch (tránh timeout/limit)
         let currentChunk = "";
         const chunks: string[] = [];
         for (const p of paragraphs) {
@@ -86,12 +90,16 @@ KHÔNG Tóm tắt, KHÔNG bỏ sót.`;
 
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
-            const fullPrompt = `[DICTIONARY]\n${relevantDictionary}\n\n[CONTEXT]\n${globalContext}\n\n[PROMPT]\n${userPrompt}\n\n[CONTENT]\n${chunk}`;
+            const isFirstChunk = i === 0;
+            const contextPrompt = isFirstChunk 
+                ? "Dịch tiêu đề chương ở DÒNG 1, sau đó dịch nội dung." 
+                : "Tiếp tục dịch đoạn văn sau đây của chương.";
+
+            const fullPrompt = `[DICTIONARY]\n${relevantDictionary}\n\n[CONTEXT]\n${globalContext}\n\n[INSTRUCTION]\n${contextPrompt}\n\n[USER_PROMPT]\n${userPrompt}\n\n[RAW_CONTENT]\n${chunk}`;
             
             let success = false;
             let errorMsg = "";
 
-            // Thử lần lượt các Model được phép
             for (const modelId of allowedModelIds) {
                 if (!quotaManager.isModelAvailable(modelId)) continue;
 
@@ -117,12 +125,10 @@ KHÔNG Tóm tắt, KHÔNG bỏ sót.`;
                         
                         if (status === 429 || errorMsg.includes("429") || errorMsg.includes("quota")) {
                             quotaManager.recordRateLimit(modelId);
-                            // Nếu lỗi 429, đợi lâu hơn một chút rồi thử lại hoặc đổi model
                             await delay(2000 * attempt);
                             continue; 
                         }
                         
-                        console.error(`Lỗi Model ${modelId} (Lần ${attempt}):`, errorMsg);
                         if (attempt === MAX_RETRY_ATTEMPTS) break;
                     }
                 }
@@ -132,7 +138,6 @@ KHÔNG Tóm tắt, KHÔNG bỏ sót.`;
             if (!success) {
                 throw new Error(`Chương "${file.name}" thất bại: ${errorMsg}`);
             }
-            // Nghỉ ngắn giữa các chunk để tránh hit RPM limit quá nhanh
             await delay(500);
         }
         

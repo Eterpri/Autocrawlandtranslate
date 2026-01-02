@@ -3,7 +3,7 @@ import { ModelQuota } from './utils/types';
 
 export const PROMPT_PRESETS = [
     {
-        name: "Mặc định (Dịch Sát Nghĩa & Đầy Đủ)",
+        name: "Mặc định (Dịch Sát Nghĩa & Đầy ĐỦ)",
         content: `MỤC TIÊU: Dịch thuật nội dung truyện từ bản convert/tiếng Trung sang tiếng Việt một cách TRUNG THỰC, SÁT NGHĨA và ĐẦY ĐỦ 100%.
 
 **YÊU CẦU CỐT LÕI:**
@@ -42,7 +42,7 @@ YÊU CẦU:
 
 export const GLOSSARY_ANALYSIS_PROMPT = `**PROMPT: LẬP HỒ SƠ PHÂN TÍCH VĂN HỌC (SERIES BIBLE)**
 
-**VAI TRÒ:** Bạn là một Nhà Phê Bình Văn Học và Chuyên Gia Ngôn Ngữ học.
+**VAI TRÒ:** Bạn là một Nhà Phê Bình Văn Học và Chuyên Gia Ngữ học.
 **NHIỆM VỤ:** Phân tích các chương mẫu và trích xuất thông tin để đảm bảo bản dịch nhất quán.
 
 **YÊU CẦU ĐẦU RA (Markdown):**
@@ -63,35 +63,33 @@ export const GLOSSARY_ANALYSIS_PROMPT = `**PROMPT: LẬP HỒ SƠ PHÂN TÍCH V�
 
 export const DEFAULT_PROMPT = PROMPT_PRESETS[0].content;
 
-// Merged Dictionary - Giữ nguyên phần dưới của bạn...
 export const DEFAULT_DICTIONARY = `
 # --- ĐẠI TỪ / XƯNG HÔ CƠ BẢN ---
 大家伙儿=mọi người/tất cả mọi người
-# ... (Phần còn lại của từ điển giữ nguyên để tiết kiệm không gian)
 `;
 
 export const MODEL_CONFIGS: ModelQuota[] = [
   {
-    id: 'gemini-3-pro-preview',
-    name: 'Gemini 3.0 Pro (Tốt nhất)',
-    rpmLimit: 2,
-    rpdLimit: 50,
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash (Ưu tiên)',
+    rpmLimit: 15,
+    rpdLimit: 1500,
     priority: 1,
     maxOutputTokens: 65536
   },
   {
-    id: 'gemini-3-flash-preview',
-    name: 'Gemini 3.0 Flash (Nhanh & Đủ ý)',
-    rpmLimit: 15,
-    rpdLimit: 100,
+    id: 'gemini-3-pro-preview',
+    name: 'Gemini 3.0 Pro (Chất lượng cao)',
+    rpmLimit: 2,
+    rpdLimit: 50,
     priority: 2,
     maxOutputTokens: 65536
   },
   {
-    id: 'gemini-flash-latest',
-    name: 'Gemini Flash (Dự phòng)',
+    id: 'gemini-3-flash-preview',
+    name: 'Gemini 3.0 Flash (Tốc độ)',
     rpmLimit: 15,
-    rpdLimit: 100,
+    rpdLimit: 1500,
     priority: 3,
     maxOutputTokens: 65536
   }

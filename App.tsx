@@ -14,14 +14,6 @@ import { quotaManager } from './utils/quotaManager';
 const MAX_CONCURRENCY = 1; 
 const BATCH_FILE_LIMIT = 1;
 
-const BG_COLORS = [
-    { name: 'Trắng', code: 'bg-white text-slate-900 border-slate-200' },
-    { name: 'Giấy cũ', code: 'bg-[#f4ecd8] text-slate-900 border-[#e5dec5]' },
-    { name: 'Xanh dịu', code: 'bg-[#e8f5e9] text-slate-900 border-[#d1e7d3]' },
-    { name: 'Đen xám', code: 'bg-[#1a1a1a] text-slate-300 border-[#333]' },
-    { name: 'Tối hẳn', code: 'bg-black text-slate-400 border-[#222]' }
-];
-
 const getStatusLabel = (status: FileStatus) => {
     switch (status) {
         case FileStatus.IDLE: return { label: 'Chờ dịch', color: 'bg-slate-100 text-slate-500' };
@@ -73,15 +65,14 @@ const App: React.FC = () => {
   const [isReaderUIHidden, setIsReaderUIHidden] = useState<boolean>(false);
   const [deviceType, setDeviceType] = useState<'mobile' | 'desktop'>('desktop');
   
-  const readerScrollRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
   const isReaderActiveRef = useRef<boolean>(false); 
-  const synthesisRef = useRef<SpeechSynthesis | null>(window.speechSynthesis);
+  const synthesisRef = useRef<SpeechSynthesis | null>(typeof window !== 'undefined' ? window.speechSynthesis : null);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [activeTTSIndex, setActiveTTSIndex] = useState<number>(-1);
   const [isTTSPaused, setIsTTSPaused] = useState<boolean>(false);
   const [isTTSPlaying, setIsTTSPlaying] = useState<boolean>(false);
-  const isTransitioningTTSRef = useRef<boolean>(false);
+  const autoPlayNextRef = useRef<boolean>(false);
 
   const currentProject = useMemo(() => projects.find(p => p.id === currentProjectId) || null, [projects, currentProjectId]);
 
@@ -148,13 +139,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const updateVoices = () => {
-        if (!window.speechSynthesis) return;
-        let voices = window.speechSynthesis.getVoices();
+        if (!synthesisRef.current) return;
+        let voices = synthesisRef.current.getVoices();
         let filtered = voices.filter(v => v.lang.startsWith('vi') || v.lang.startsWith('en'));
         setAvailableVoices(filtered);
     };
     updateVoices();
-    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = updateVoices;
+    if (synthesisRef.current) synthesisRef.current.onvoiceschanged = updateVoices;
   }, []);
 
   useEffect(() => { getAllProjects().then(setProjects); }, []);
@@ -334,7 +325,13 @@ const App: React.FC = () => {
                 if (batchIds.includes(c.id)) {
                     const translated = results.get(c.id);
                     if (translated) {
-                        return { ...c, status: FileStatus.COMPLETED, translatedContent: translated, usedModel: model };
+                        const lines = translated.split('\n');
+                        const firstLine = lines[0].trim();
+                        let aiTranslatedName = c.name;
+                        if ((firstLine.toLowerCase().includes('chương') || firstLine.toLowerCase().includes('tiết')) && firstLine.length < 100) {
+                            aiTranslatedName = translateChapterTitle(firstLine);
+                        }
+                        return { ...c, name: aiTranslatedName, status: FileStatus.COMPLETED, translatedContent: translated, usedModel: model };
                     }
                     return { ...c, status: FileStatus.ERROR, errorMessage: "Dữ liệu trả về không hợp lệ" };
                 }
@@ -343,7 +340,7 @@ const App: React.FC = () => {
         } catch (e: any) {
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR, errorMessage: e.message } : c) } : p));
         } finally { 
-            setTimeout(() => setActiveWorkers(prev => prev - 1), 1000); // Đợi 1s trước khi chạy batch tiếp theo
+            setTimeout(() => setActiveWorkers(prev => prev - 1), 1000); 
         }
     };
     processBatch();
@@ -357,17 +354,43 @@ const App: React.FC = () => {
   const viewingChapter = useMemo(() => sortedChapters.find(c => c.id === viewingFileId) || null, [sortedChapters, viewingFileId]);
   const viewingRawFile = useMemo(() => sortedChapters.find(c => c.id === viewingRawId) || null, [sortedChapters, viewingRawId]);
 
+  // TTS Refined Logic
   const stopTTS = useCallback(() => {
-    if (synthesisRef.current) synthesisRef.current.cancel();
-    setActiveTTSIndex(-1); setIsTTSPaused(false); setIsTTSPlaying(false);
+    if (synthesisRef.current) {
+        synthesisRef.current.cancel();
+    }
+    setActiveTTSIndex(-1); 
+    setIsTTSPaused(false); 
+    setIsTTSPlaying(false);
   }, []);
 
   const playTTS = useCallback((startIndex: number = 0) => {
-    if (!isReaderActiveRef.current || !viewingChapter?.translatedContent) { stopTTS(); return; }
-    if (synthesisRef.current) synthesisRef.current.cancel();
+    if (!isReaderActiveRef.current || !viewingChapter?.translatedContent || !synthesisRef.current) { 
+        stopTTS(); 
+        return; 
+    }
+    
+    synthesisRef.current.cancel();
 
     const paragraphs = viewingChapter.translatedContent.split('\n').filter(p => p.trim());
-    if (startIndex >= paragraphs.length) { stopTTS(); return; }
+    
+    // Kiểm tra nếu đã đọc xong chương
+    if (startIndex >= paragraphs.length) { 
+        const currentIndex = sortedChapters.findIndex(c => c.id === viewingChapter.id);
+        if (currentIndex !== -1 && currentIndex < sortedChapters.length - 1) {
+            const nextCh = sortedChapters[currentIndex + 1];
+            if (nextCh.status === FileStatus.COMPLETED) {
+                autoPlayNextRef.current = true;
+                setViewingFileId(nextCh.id);
+                addToast(`Đã xong chương. Tự động chuyển đến ${nextCh.name}`, "info");
+                return;
+            }
+        }
+        stopTTS(); 
+        return; 
+    }
+
+    if (startIndex < 0) startIndex = 0;
 
     setActiveTTSIndex(startIndex);
     setIsTTSPaused(false);
@@ -376,22 +399,60 @@ const App: React.FC = () => {
     const utterance = new SpeechSynthesisUtterance(paragraphs[startIndex]);
     utterance.lang = 'vi-VN';
     utterance.rate = readerSettings.ttsRate || 1.2;
+    utterance.pitch = readerSettings.ttsPitch || 1.0;
+    
     if (readerSettings.ttsVoice) {
-        const v = synthesisRef.current?.getVoices().find(v => v.voiceURI === readerSettings.ttsVoice);
+        const v = synthesisRef.current.getVoices().find(v => v.voiceURI === readerSettings.ttsVoice);
         if (v) utterance.voice = v;
     }
-    utterance.onend = () => { if (!isTTSPaused) playTTS(startIndex + 1); };
-    synthesisRef.current?.speak(utterance);
-  }, [viewingChapter, readerSettings, stopTTS, isTTSPaused]);
+
+    utterance.onend = () => { 
+        if (!isTTSPaused && isReaderActiveRef.current) {
+            playTTS(startIndex + 1); 
+        }
+    };
+
+    utterance.onerror = (event) => {
+        if (event.error !== 'interrupted') {
+            setIsTTSPlaying(false);
+        }
+    };
+
+    synthesisRef.current.speak(utterance);
+  }, [viewingChapter, sortedChapters, readerSettings, stopTTS, isTTSPaused, addToast]);
+
+  // Effect để tự động phát khi chuyển chương
+  useEffect(() => {
+    if (autoPlayNextRef.current && viewingChapter && isReaderActiveRef.current) {
+        autoPlayNextRef.current = false;
+        setTimeout(() => playTTS(0), 1000);
+    }
+  }, [viewingFileId, viewingChapter, playTTS]);
 
   const toggleTTSPause = () => {
-    if (synthesisRef.current?.paused) { synthesisRef.current.resume(); setIsTTSPaused(false); }
-    else if (synthesisRef.current?.speaking) { synthesisRef.current.pause(); setIsTTSPaused(true); }
-    else { playTTS(activeTTSIndex === -1 ? 0 : activeTTSIndex); }
+    if (!synthesisRef.current) return;
+
+    if (synthesisRef.current.speaking) {
+        if (synthesisRef.current.paused) { 
+            synthesisRef.current.resume(); 
+            setIsTTSPaused(false); 
+        } else { 
+            synthesisRef.current.pause(); 
+            setIsTTSPaused(true); 
+        }
+    } else {
+        playTTS(activeTTSIndex === -1 ? 0 : activeTTSIndex);
+    }
   };
 
   const openReader = (id: string) => { setViewingFileId(id); setIsReaderUIHidden(false); isReaderActiveRef.current = true; };
   const closeReader = () => { isReaderActiveRef.current = false; stopTTS(); setViewingFileId(null); };
+
+  useEffect(() => {
+      if (activeTTSIndex !== -1 && activeLineRef.current) {
+          activeLineRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+  }, [activeTTSIndex]);
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
@@ -508,25 +569,64 @@ const App: React.FC = () => {
 
       {viewingChapter && (
           <div className={`fixed inset-0 z-[100] flex flex-col transition-all duration-700 ${readerSettings.bgColor}`}>
-              <div className={`fixed top-0 inset-x-0 z-[110] transition-all flex items-center justify-between px-6 h-16 glass-panel border-b ${isReaderUIHidden ? '-translate-y-full' : 'translate-y-0'}`}>
+              <div className={`fixed top-0 inset-x-0 z-[110] transition-all flex items-center justify-between px-6 h-16 glass-panel border-b ${isReaderUIHidden ? '-translate-y-full opacity-0' : 'translate-y-0 opacity-100'}`}>
                 <button onClick={closeReader} className="p-2 hover:bg-black/10 rounded-2xl"><ArrowRight className="w-6 h-6 rotate-180" /></button>
-                <h3 className="font-bold text-sm truncate max-w-xs">{String(viewingChapter.name)}</h3>
-                <button onClick={() => setShowTTSSettings(!showTTSSettings)} className="p-3 hover:bg-black/10 rounded-2xl"><Sliders className="w-5 h-5" /></button>
+                <div className="flex flex-col items-center max-w-[50%]">
+                    <h3 className="font-bold text-sm truncate w-full text-center">{String(viewingChapter.name)}</h3>
+                    {isTTSPlaying && <div className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping"></div><span className="text-[9px] font-bold text-indigo-600 uppercase">Đang phát âm thanh</span></div>}
+                </div>
+                <button onClick={() => setShowTTSSettings(!showTTSSettings)} className={`p-3 rounded-2xl transition-all ${showTTSSettings ? 'bg-indigo-600 text-white' : 'hover:bg-black/10'}`}><Sliders className="w-5 h-5" /></button>
               </div>
+
+              {showTTSSettings && (
+                  <div className={`fixed z-[120] bg-white rounded-[2rem] shadow-2xl p-6 border border-slate-100 transition-all ${deviceType === 'mobile' ? 'bottom-0 inset-x-0 rounded-b-none' : 'bottom-24 right-8 w-80'}`}>
+                      <div className="flex items-center justify-between mb-4"><h4 className="font-bold text-slate-800 text-sm">Cấu hình TTS</h4><button onClick={() => setShowTTSSettings(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400"><X className="w-4 h-4" /></button></div>
+                      <div className="space-y-4">
+                        <div className="space-y-1.5">
+                            <label className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest">Giọng nói</label>
+                            <select value={readerSettings.ttsVoice} onChange={(e) => setReaderSettings(prev => ({...prev, ttsVoice: e.target.value}))} className="w-full p-3 rounded-xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-bold text-xs appearance-none">
+                                <option value="">Hệ thống</option>
+                                {availableVoices.map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1.5">
+                                <label className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest">Tốc độ {readerSettings.ttsRate}x</label>
+                                <input type="range" min="0.5" max="2.5" step="0.1" value={readerSettings.ttsRate} onChange={(e) => setReaderSettings(prev => ({ ...prev, ttsRate: parseFloat(e.target.value) }))} className="w-full accent-indigo-600" />
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest">Tông {readerSettings.ttsPitch}x</label>
+                                <input type="range" min="0.5" max="2.0" step="0.1" value={readerSettings.ttsPitch} onChange={(e) => setReaderSettings(prev => ({ ...prev, ttsPitch: parseFloat(e.target.value) }))} className="w-full accent-indigo-600" />
+                            </div>
+                        </div>
+                      </div>
+                  </div>
+              )}
+
               <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pt-24 pb-32" onClick={() => setIsReaderUIHidden(!isReaderUIHidden)}>
-                  <div className="max-w-3xl mx-auto space-y-8">
+                  <div className="max-w-3xl mx-auto space-y-4">
+                    <h1 className="text-2xl font-display font-bold mb-12 text-center opacity-90 leading-tight">{String(viewingChapter.name)}</h1>
                     {viewingChapter.translatedContent?.split('\n').filter(p => p.trim()).map((line, idx) => (
-                        <p key={idx} className={`p-4 rounded-2xl transition-all border-2 border-transparent hover:bg-black/5 text-lg leading-relaxed ${activeTTSIndex === idx ? 'bg-indigo-500/10 border-indigo-500/30 font-medium' : ''}`}>
+                        <p 
+                            key={idx} 
+                            ref={activeTTSIndex === idx ? activeLineRef : null}
+                            onClick={(e) => { e.stopPropagation(); playTTS(idx); }}
+                            className={`p-4 rounded-2xl transition-all border-2 border-transparent hover:bg-black/5 text-lg leading-relaxed cursor-pointer ${activeTTSIndex === idx ? 'bg-indigo-500/10 border-indigo-500/30 font-medium' : 'opacity-90'}`}
+                            style={{ fontSize: `${readerSettings.fontSize}px` }}
+                        >
                             {line.trim()}
                         </p>
                     ))}
                   </div>
               </div>
-              <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[110] transition-all ${isReaderUIHidden ? 'translate-y-24 opacity-0' : 'translate-y-0 opacity-100'}`}>
-                <div className="flex items-center gap-4 p-3 bg-white/20 backdrop-blur-2xl rounded-[2.5rem] border border-white/20 shadow-2xl">
-                    <button onClick={toggleTTSPause} className="p-6 bg-indigo-600 text-white rounded-full shadow-xl">
-                        {synthesisRef.current?.paused || !synthesisRef.current?.speaking ? <Play className="w-8 h-8 fill-white" /> : <Pause className="w-8 h-8 fill-white" />}
+
+              <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[110] transition-all duration-500 ${isReaderUIHidden && isTTSPlaying && !isTTSPaused ? 'translate-y-24 opacity-0 scale-90' : 'translate-y-0 opacity-100 scale-100'}`}>
+                <div className="flex items-center gap-4 p-3 bg-white/40 backdrop-blur-2xl rounded-[3rem] border border-white/30 shadow-2xl">
+                    <button onClick={(e) => { e.stopPropagation(); stopTTS(); }} className="p-4 hover:bg-black/10 rounded-full transition-all text-current"><Square className="w-5 h-5 fill-current" /></button>
+                    <button onClick={(e) => { e.stopPropagation(); toggleTTSPause(); }} className="p-7 bg-indigo-600 text-white rounded-full shadow-xl hover:scale-105 active:scale-95 transition-all">
+                        {isTTSPlaying && !isTTSPaused ? <Pause className="w-8 h-8 fill-white" /> : <Play className="w-8 h-8 fill-white translate-x-0.5" />}
                     </button>
+                    <button onClick={(e) => { e.stopPropagation(); playTTS(activeTTSIndex + 1); }} className="p-4 hover:bg-black/10 rounded-full transition-all text-current"><SkipForward className="w-5 h-5 fill-current" /></button>
                 </div>
               </div>
           </div>
@@ -553,7 +653,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">{toasts.map(t => (<div key={t.id} className={`pointer-events-auto flex items-center gap-4 px-8 py-5 rounded-[2rem] shadow-soft border-2 animate-in slide-in-from-right duration-500 min-w-[320px] backdrop-blur-md ${t.type === 'success' ? 'bg-emerald-50/90 text-emerald-800 border-emerald-100' : t.type === 'error' ? 'bg-rose-50/90 text-rose-800 border-rose-100' : 'bg-white/90 text-slate-800 border-slate-100'}`}><div className={`p-2 rounded-xl ${t.type === 'success' ? 'bg-emerald-500' : t.type === 'error' ? 'bg-rose-500' : 'bg-indigo-500'} text-white`}>{t.type === 'success' ? <CheckCircle className="w-5 h-5" /> : t.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <Info className="w-5 h-5" />}</div><span className="font-bold text-sm">{t.message}</span></div>))}</div>
-      {!viewingFileId && (isFetchingLinks || isProcessing) && (<div className="fixed bottom-10 left-10 z-[150] glass-panel p-5 rounded-[2.5rem] shadow-2xl flex items-center gap-5"><div className="w-12 h-12 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin" /><div className="pr-4"><p className="font-bold text-sm text-slate-800 uppercase tracking-widest">{isProcessing ? 'Dịch tự động' : 'Cào dữ liệu'}</p><p className="text-[10px] font-bold text-indigo-500 opacity-70">SYSTEM ACTIVE • 3.0 FLASH</p></div></div>)}
+      {!viewingFileId && (isFetchingLinks || isProcessing) && (<div className="fixed bottom-10 left-10 z-[150] glass-panel p-5 rounded-[2.5rem] shadow-2xl flex items-center gap-5"><div className="w-12 h-12 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin" /><div className="pr-4"><p className="font-bold text-sm text-slate-800 uppercase tracking-widest">{isProcessing ? 'Dịch tự động' : 'Cào dữ liệu'}</p><p className="text-[10px] font-bold text-indigo-500 opacity-70">SYSTEM ACTIVE • 2.5 FLASH</p></div></div>)}
     </div>
   );
 };
