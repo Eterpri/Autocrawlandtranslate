@@ -58,9 +58,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState<string>("");
-  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
+  // Removed API key local states and UI management as per mandatory guidelines
 
   const [isWakeLockActive, setIsWakeLockActive] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
@@ -107,28 +105,6 @@ const App: React.FC = () => {
     else if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Opera Mini/i.test(ua)) setDeviceType('mobile');
     else setDeviceType('desktop');
   }, []);
-
-  useEffect(() => {
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey && savedKey.length > 30) {
-      setApiKey(savedKey);
-      setApiKeyInput(savedKey);
-    } else {
-      setShowApiKeyModal(true);
-    }
-  }, []);
-
-  const handleSaveApiKey = () => {
-    const keyToSave = apiKeyInput.trim();
-    if (keyToSave.length < 30) {
-        addToast("API Key không hợp lệ.", "error");
-        return;
-    }
-    localStorage.setItem('gemini_api_key', keyToSave);
-    setApiKey(keyToSave);
-    setShowApiKeyModal(false);
-    addToast("Đã lưu API Key!", "success");
-  };
 
   const addToast = useCallback((message: any, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
     const id = generateId();
@@ -179,10 +155,11 @@ const App: React.FC = () => {
   useEffect(() => { if (currentProject) persistProject(currentProject); }, [currentProject?.lastModified]);
 
   const handleAIAnalyze = async () => {
-    if (!currentProject || !apiKey) return;
+    if (!currentProject) return;
     setIsAnalyzing(true);
     try {
-        const result = await analyzeStoryContext(currentProject.chapters, currentProject.info, apiKey);
+        // analyzeStoryContext internally uses process.env.API_KEY
+        const result = await analyzeStoryContext(currentProject.chapters, currentProject.info);
         updateProject(currentProject.id, { globalContext: result });
         addToast("Phân tích AI hoàn tất!", "success");
     } catch (e: any) {
@@ -257,7 +234,10 @@ const App: React.FC = () => {
             ...p, chapters: [...p.chapters, newChapter], lastCrawlUrl: result.nextUrl || startUrl, lastModified: Date.now()
         } : p));
         if (isProcessing) setProcessingQueue(prev => [...new Set([...prev, chapterId])]);
-    } catch (e: any) { addToast(e.message, "error"); } finally {
+    } catch (e: any) { 
+      addToast(e.message, "error");
+      if (isProcessing) setIsAutoCrawlEnabled(false);
+    } finally {
         isFetchingLinksRef.current = false; setIsFetchingLinks(false); setLinkInput("");
     }
   };
@@ -308,17 +288,22 @@ const App: React.FC = () => {
   }, [currentProject]);
 
   const stopTranslation = useCallback(() => {
-    setIsProcessing(false); setProcessingQueue([]);
+    setIsProcessing(false); 
+    setProcessingQueue([]);
+    addToast("Đã dừng tiến trình dịch", "info");
   }, []);
 
-  /**
-   * Worker xử lý dịch thuật với Auto-Crawl "Eager" (Kích hoạt sớm)
-   */
   useEffect(() => {
-    if (!isProcessing || !currentProjectId || !apiKey) return;
+    if (!isProcessing || !currentProjectId) return;
     
     if (processingQueue.length === 0 && activeWorkers === 0) {
-        if (!isAutoCrawlEnabled || !currentProject?.lastCrawlUrl || isFetchingLinksRef.current) return;
+        if (isAutoCrawlEnabled && currentProject?.lastCrawlUrl && !isFetchingLinksRef.current) {
+            handleLinkCrawl(currentProject.lastCrawlUrl);
+            return;
+        } else if (!isFetchingLinksRef.current) {
+            setIsProcessing(false);
+            return;
+        }
     }
     
     if (processingQueue.length === 0 || activeWorkers >= MAX_CONCURRENCY) return;
@@ -340,7 +325,8 @@ const App: React.FC = () => {
             const targetProj = projects.find(p => p.id === currentProjectId);
             if (!targetProj) return;
             const prompt = replacePromptVariables(targetProj.promptTemplate, targetProj.info);
-            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)).map(c => ({ id: c.id, content: c.content, name: c.name })), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id), apiKey);
+            // translateBatch internally uses process.env.API_KEY
+            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)).map(c => ({ id: c.id, content: c.content, name: c.name })), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id));
             
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, lastModified: Date.now(), chapters: p.chapters.map(c => {
                 if (batchIds.includes(c.id)) {
@@ -358,11 +344,15 @@ const App: React.FC = () => {
                 return c;
             }) } : p));
         } catch (e: any) {
+            console.error("Batch error:", e);
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR } : c) } : p));
-        } finally { setActiveWorkers(prev => prev - 1); }
+            addToast(`Lỗi dịch chương: ${e.message}`, "error");
+        } finally { 
+            setTimeout(() => setActiveWorkers(prev => prev - 1), 500);
+        }
     };
     processBatch();
-  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, apiKey, isAutoCrawlEnabled, currentProject?.lastCrawlUrl]);
+  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, isAutoCrawlEnabled, currentProject?.lastCrawlUrl]);
 
   const sortedChapters = useMemo(() => {
     if (!currentProject) return [];
@@ -390,8 +380,10 @@ const App: React.FC = () => {
             if (nextChapter.status === FileStatus.COMPLETED) {
                 isTransitioningTTSRef.current = true;
                 setViewingFileId(nextChapter.id); 
-                setActiveTTSIndex(0); 
+                setActiveTTSIndex(-1);
                 return;
+            } else {
+              addToast("Chương tiếp theo chưa được dịch xong.", "info");
             }
         }
         stopTTS();
@@ -418,21 +410,23 @@ const App: React.FC = () => {
         }
     };
 
-    utterance.onerror = (e) => { console.error("TTS Error:", e); };
+    utterance.onerror = (e) => { 
+      console.error("TTS Error:", e);
+      if (!isTTSPaused) setTimeout(() => playTTS(startIndex + 1), 500);
+    };
+
     synthesisRef.current?.speak(utterance);
   }, [viewingChapter, readerSettings, viewingFileId, sortedChapters, stopTTS, isTTSPaused]);
 
   useEffect(() => {
     if (isReaderActiveRef.current && viewingFileId && isTTSPlaying && !isTTSPaused && isTransitioningTTSRef.current) {
-        const timer = setTimeout(() => {
-            if (viewingChapter?.translatedContent) {
-                isTransitioningTTSRef.current = false;
-                playTTS(0); 
-            }
-        }, 300); 
-        return () => clearTimeout(timer);
+        if (viewingChapter?.translatedContent) {
+            isTransitioningTTSRef.current = false;
+            const timer = setTimeout(() => playTTS(0), 500);
+            return () => clearTimeout(timer);
+        }
     }
-  }, [viewingFileId, viewingChapter?.translatedContent]);
+  }, [viewingFileId, viewingChapter?.translatedContent, isTTSPlaying, isTTSPaused, playTTS]);
 
   const handleParagraphClick = (idx: number) => {
     isTransitioningTTSRef.current = false;
@@ -451,8 +445,19 @@ const App: React.FC = () => {
     }
   };
 
-  const openReader = (id: string) => { isReaderActiveRef.current = true; setViewingFileId(id); setActiveTTSIndex(-1); setIsTTSPaused(false); setIsReaderUIHidden(false); };
-  const closeReader = () => { isReaderActiveRef.current = false; stopTTS(); setViewingFileId(null); };
+  const openReader = (id: string) => { 
+    isReaderActiveRef.current = true; 
+    setViewingFileId(id); 
+    setActiveTTSIndex(-1); 
+    setIsTTSPaused(false); 
+    setIsReaderUIHidden(false); 
+  };
+  
+  const closeReader = () => { 
+    isReaderActiveRef.current = false; 
+    stopTTS(); 
+    setViewingFileId(null); 
+  };
 
   useEffect(() => { 
       if (activeTTSIndex !== -1 && activeLineRef.current) {
@@ -463,7 +468,9 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!viewingFileId) return;
     let timeout: any;
-    if (!isTTSPaused && activeTTSIndex !== -1) timeout = setTimeout(() => setIsReaderUIHidden(true), 3000);
+    if (!isTTSPaused && activeTTSIndex !== -1) {
+        timeout = setTimeout(() => setIsReaderUIHidden(true), 3000);
+    }
     return () => clearTimeout(timeout);
   }, [isTTSPaused, activeTTSIndex, viewingFileId]);
 
@@ -490,7 +497,6 @@ const App: React.FC = () => {
             ))}
           </div>
           <div className="p-6 border-t border-slate-100 space-y-3">
-            <button onClick={() => setShowApiKeyModal(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-600 hover:bg-amber-50 hover:text-amber-700 font-semibold transition-all"><Key className="w-5 h-5" />API Key Settings</button>
             <button onClick={toggleWakeLock} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${isWakeLockActive ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}>{isWakeLockActive ? <Sun className="w-5 h-5 animate-pulse" /> : <Moon className="w-5 h-5" />}{isWakeLockActive ? "Đang giữ sáng" : "Giữ sáng màn hình"}</button>
           </div>
         </div>
@@ -502,7 +508,7 @@ const App: React.FC = () => {
           {currentProject && (
             <div className="flex items-center gap-3">
                 <button onClick={() => setShowContextSetup(true)} className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl hover:bg-indigo-100 transition-all flex items-center gap-2 font-bold text-sm shadow-sm"><Brain className="w-5 h-5" /><span className="hidden sm:inline">Bối cảnh</span></button>
-                <button onClick={() => isProcessing ? stopTranslation() : startTranslation(false)} disabled={!apiKey} className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-3 px-6 rounded-2xl text-sm shadow-xl active:scale-95 transition-all disabled:opacity-50`}>{isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{isProcessing ? "Dừng" : "Dịch Ngay"}</button>
+                <button onClick={() => isProcessing ? stopTranslation() : startTranslation(false)} className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-3 px-6 rounded-2xl text-sm shadow-xl active:scale-95 transition-all disabled:opacity-50`}>{isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{isProcessing ? "Dừng" : "Dịch Ngay"}</button>
             </div>
           )}
         </header>
@@ -586,50 +592,6 @@ const App: React.FC = () => {
               </div>
           </div>
       )}
-
-      {/* API Key Modal with Guide */}
-      {showApiKeyModal && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 sm:p-10 text-center shadow-2xl overflow-y-auto max-h-[90vh] custom-scrollbar">
-            <div className="w-20 h-20 bg-amber-100 text-amber-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
-              <Key className="w-10 h-10" />
-            </div>
-            <h2 className="text-2xl font-bold text-slate-800 mb-2 font-display">Gemini API Key</h2>
-            <p className="text-sm text-slate-500 mb-6 font-medium leading-relaxed px-4">Để sử dụng trí tuệ nhân tạo Gemini dịch thuật, bạn cần nạp một mã API Key cá nhân.</p>
-            
-            <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 mb-8 text-left">
-              <h4 className="flex items-center gap-2 font-bold text-indigo-700 text-sm mb-3">
-                <HelpCircle className="w-4 h-4" /> Cách lấy API Key miễn phí:
-              </h4>
-              <ol className="text-xs text-slate-600 space-y-2.5 font-medium leading-relaxed list-decimal list-inside">
-                <li>Truy cập vào <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-600 underline font-bold inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-3 h-3" /></a></li>
-                <li>Nhấn nút <span className="text-indigo-700 font-bold">"Create API key"</span></li>
-                <li>Chọn project (hoặc tạo mới) và sao chép mã (bắt đầu bằng <span className="bg-white px-1 border border-indigo-200 rounded">AIza...</span>)</li>
-                <li>Dán mã đó vào ô bên dưới.</li>
-              </ol>
-            </div>
-
-            <input 
-              type="password" 
-              placeholder="Dán API Key (AIza...)" 
-              value={apiKeyInput} 
-              onChange={(e) => setApiKeyInput(e.target.value)} 
-              className="w-full text-center p-5 rounded-3xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-medium mb-4 transition-all shadow-inner" 
-            />
-            
-            <button 
-              onClick={handleSaveApiKey} 
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-5 rounded-3xl shadow-xl active:scale-95 transition-all text-lg"
-            >
-              Lưu & Bắt đầu
-            </button>
-            
-            <p className="mt-6 text-[10px] text-slate-400 font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-              <Zap className="w-3 h-3 text-amber-500 fill-amber-500" /> Powered by Google Gemini AI
-            </p>
-          </div>
-        </div>
-      )}
       
       {/* New Project Modal */}
       {showNewProjectModal && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-xl p-10 shadow-2xl space-y-6 text-slate-800"><h3 className="font-bold text-2xl font-display">Tạo truyện mới</h3><input type="text" placeholder="Tên truyện" value={newProjectInfo.title} onChange={(e) => setNewProjectInfo({...newProjectInfo, title: e.target.value})} className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-bold" /><div className="flex gap-4 pt-4"><button onClick={() => setShowNewProjectModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={createNewProject} className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl active:scale-95 transition-all">Xác nhận</button></div></div></div>)}
@@ -639,6 +601,31 @@ const App: React.FC = () => {
       
       {/* Context Modal */}
       {showContextSetup && currentProject && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden text-slate-800"><div className="px-10 py-8 border-b flex items-center justify-between"><h3 className="font-bold text-2xl font-display">Bối cảnh & Từ điển</h3><button onClick={() => setShowContextSetup(false)} className="p-2.5 hover:bg-slate-100 rounded-2xl"><X className="w-7 h-7 text-slate-400" /></button></div><div className="flex-1 overflow-y-auto p-10 grid grid-cols-2 gap-8"><div className="space-y-2"><label className="text-xs font-extrabold text-slate-400 uppercase tracking-widest px-2">Từ điển (Gốc=Dịch)</label><textarea value={currentProject.dictionary} onChange={e => updateProject(currentProject.id, { dictionary: e.target.value })} className="w-full h-full min-h-[400px] p-6 rounded-[2rem] bg-slate-50 border-2 border-transparent focus:border-indigo-400 outline-none font-mono text-sm leading-relaxed" /></div><div className="space-y-2"><label className="text-xs font-extrabold text-slate-400 uppercase tracking-widest px-2">Bối cảnh / Cốt truyện</label><textarea value={currentProject.globalContext} onChange={e => updateProject(currentProject.id, { globalContext: e.target.value })} className="w-full h-full min-h-[400px] p-6 rounded-[2rem] bg-slate-50 border-2 border-transparent focus:border-indigo-400 outline-none text-sm leading-relaxed" /></div></div><div className="p-8 bg-slate-50 border-t flex justify-end gap-4"><button onClick={handleAIAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold text-sm hover:bg-amber-100">{isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand className="w-4 h-4" />}AI Phân Tích</button><button onClick={() => setShowContextSetup(false)} className="bg-indigo-600 text-white font-bold py-4 px-12 rounded-2xl shadow-xl">Lưu cấu hình</button></div></div></div>)}
+
+      {/* Raw View Modal */}
+      {viewingRawId && viewingRawFile && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="bg-white rounded-[3rem] w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+                <div className="px-10 py-8 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+                    <div>
+                        <h3 className="font-bold text-2xl font-display text-slate-800">Nội dung gốc (Raw)</h3>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{viewingRawFile.name} • {viewingRawFile.content.length} ký tự</p>
+                    </div>
+                    <button onClick={() => setViewingRawId(null)} className="p-3 hover:bg-rose-50 text-slate-400 hover:text-rose-500 rounded-2xl transition-all"><X className="w-7 h-7" /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-10 custom-scrollbar bg-slate-50/50">
+                    <div className="max-w-2xl mx-auto">
+                        <pre className="whitespace-pre-wrap font-sans text-lg text-slate-700 leading-relaxed tracking-tight">{viewingRawFile.content}</pre>
+                    </div>
+                </div>
+                <div className="p-8 bg-white border-t border-slate-100 flex justify-end gap-4">
+                    <button onClick={() => { setViewingRawId(null); if(viewingRawFile.status === FileStatus.COMPLETED) openReader(viewingRawFile.id); }} className="px-8 py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-xl active:scale-95 transition-all flex items-center gap-2">
+                        {viewingRawFile.status === FileStatus.COMPLETED ? <><Eye className="w-5 h-5" /> Mở bản dịch</> : <><Sparkles className="w-5 h-5" /> Chờ dịch</>}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
       <div className="fixed bottom-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">{toasts.map(t => (<div key={t.id} className={`pointer-events-auto flex items-center gap-4 px-8 py-5 rounded-[2rem] shadow-soft border-2 animate-in slide-in-from-right duration-500 min-w-[320px] backdrop-blur-md ${t.type === 'success' ? 'bg-emerald-50/90 text-emerald-800 border-emerald-100' : t.type === 'error' ? 'bg-rose-50/90 text-rose-800 border-rose-100' : 'bg-white/90 text-slate-800 border-slate-100'}`}><div className={`p-2 rounded-xl ${t.type === 'success' ? 'bg-emerald-500' : t.type === 'error' ? 'bg-rose-500' : 'bg-indigo-500'} text-white`}>{t.type === 'success' ? <CheckCircle className="w-5 h-5" /> : t.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <Info className="w-5 h-5" />}</div><span className="font-bold text-sm leading-snug">{t.message}</span></div>))}</div>
       {!viewingFileId && (isFetchingLinks || isProcessing) && (<div className="fixed bottom-10 left-10 z-[150] glass-panel p-5 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-left duration-500 flex items-center gap-5"><div className="relative"><div className="w-12 h-12 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin" /><div className="absolute inset-0 flex items-center justify-center"><Zap className="w-4 h-4 text-amber-500 fill-amber-500" /></div></div><div className="pr-4"><p className="font-bold text-sm text-slate-800 uppercase tracking-widest">{isProcessing ? 'Dịch tự động' : 'Cào dữ liệu'}</p><p className="text-[10px] font-bold text-indigo-500 opacity-70">SYSTEM ACTIVE • 2.5 FLASH</p></div></div>)}

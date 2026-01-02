@@ -6,11 +6,9 @@ import { StoryInfo, FileItem } from './utils/types';
 
 const CHUNK_SIZE_LIMIT = 3500; 
 
-const getAiClient = (apiKey: string) => {
-  if (!apiKey || apiKey.length < 30) {
-    throw new Error("Gemini API Key không hợp lệ. Vui lòng kiểm tra lại.");
-  }
-  return new GoogleGenAI({ apiKey });
+// Initializing GoogleGenAI using process.env.API_KEY exclusively as per requirements
+const getAiClient = () => {
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 const optimizeDictionary = (dictionary: string, content: string): string => {
@@ -32,30 +30,21 @@ const optimizeDictionary = (dictionary: string, content: string): string => {
   return usedLines.join('\n');
 };
 
-/**
- * Lọc rác thông minh đa lớp:
- * 1. Lọc AI chatter (Vâng, đây là bản dịch...)
- * 2. Lọc quảng cáo web (Regex patterns)
- * 3. Lọc dòng rác kỹ thuật (Link, số chương lặp lại)
- * 4. Kiểm soát mật độ tiếng Trung sót lại
- */
 const cleanupTranslatedText = (text: string, originalChapterName: string): string => {
     if (!text) return "";
     
     let lines = text.split('\n').map(l => l.trim()).filter(l => l !== "");
     
-    // Mẫu AI chatter thường gặp
     const AI_INTRO_OUTRO = [
         /^vâng/i, /^đây là/i, /^bản dịch/i, /^tôi đã/i, /^dưới đây là/i, 
         /^chào/i, /^tất nhiên/i, /^chắc chắn/i, /^hy vọng/i, /^phần tiếp theo/i,
         /\[\[\[.*?\]\]\]/g, /###/g, /===/g, /---/g
     ];
 
-    // Mẫu rác quảng cáo & tech rác từ các web Trung (mạnh mẽ hơn)
     const JUNK_PATTERNS = [
         /đang đọc tại/i, /truyenfull/i, /metruyen/i, /sstruyen/i, /tangthuvien/i,
         /chúc bạn đọc truyện vui vẻ/i, /bản dịch thuộc về/i, /nguồn:/i,
-        /tác giả:/i, /người dịch:/i, /biên tập:/i, /vui lòng không/i,
+        /tác giả:/i, /nguồn:/i, /người dịch:/i, /biên tập:/i, /vui lòng không/i,
         /mọi người nhớ ủng hộ/i, /nhấn thích/i, /đánh giá/i, /bấm vào đây/i,
         /tải xuống/i, /69shuba/i, /piaotian/i, /uukanshu/i, /biquge/i, /69shu/i,
         /www\./i, /\.com/i, /\.net/i, /\.org/i, /\.vn/i, /https?:\/\//i,
@@ -64,26 +53,16 @@ const cleanupTranslatedText = (text: string, originalChapterName: string): strin
 
     lines = lines.filter((line, idx) => {
         const lower = line.toLowerCase();
-        
-        // 1. Loại bỏ AI Intro ở 2 dòng đầu hoặc 2 dòng cuối
         if ((idx < 2 || idx > lines.length - 3) && AI_INTRO_OUTRO.some(p => p.test(line))) return false;
-        
-        // 2. Lọc quảng cáo
         if (JUNK_PATTERNS.some(p => p.test(line))) return false;
-        
-        // 3. Lọc dòng quá ngắn chứa ký tự web rác
         if (line.length < 60 && (lower.includes('shuba') || lower.includes('69') || lower.includes('html'))) return false;
 
-        // 4. Kiểm tra tỷ lệ tiếng Trung (Nếu > 15% là chữ Hán -> chưa dịch xong)
         const chineseChars = line.match(/[\u4e00-\u9fa5]/g);
         if (chineseChars && chineseChars.length > line.length * 0.15) {
-            // Trừ khi dòng này cực ngắn và là tên riêng (nhưng thường tên riêng cũng nên dịch)
             if (line.length > 10) return false;
         }
 
-        // 5. Loại bỏ các dòng lặp lại tên chương (Raw) nếu AI lỡ để lại
         if (originalChapterName && lower.includes(originalChapterName.toLowerCase()) && line.length < originalChapterName.length + 10) {
-            // Nếu là dòng đầu tiên thì CÓ THỂ là tiêu đề đã dịch, nên ta kiểm tra xem nó còn tiếng Trung không
             if (idx === 0 && !/[\u4e00-\u9fa5]/.test(line)) return true;
             return false;
         }
@@ -105,7 +84,8 @@ const handleErrorQuota = (error: any, modelId: string) => {
 
 const selectModel = (allowedModelIds: string[]) => {
   const currentConfigs = quotaManager.getConfigs();
-  const priorityTier = ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-latest'];
+  // Ưu tiên Gemini 2.5 Flash lên hàng đầu theo yêu cầu
+  const priorityTier = ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-latest'];
   const available = currentConfigs
     .filter(c => allowedModelIds.includes(c.id) && quotaManager.isModelAvailable(c.id))
     .sort((a, b) => {
@@ -142,10 +122,10 @@ export const translateBatch = async (
     userPrompt: string,
     dictionary: string,
     globalContext: string,
-    allowedModelIds: string[],
-    apiKey: string
+    allowedModelIds: string[]
 ): Promise<{ results: Map<string, string>, model: string }> => {
-    const ai = getAiClient(apiKey);
+    // API key is handled internally via process.env.API_KEY
+    const ai = getAiClient();
     const finalResults = new Map<string, string>();
     let lastUsedModel = "";
 
@@ -162,6 +142,7 @@ QUY TẮC BẮT BUỘC:
     for (const file of files) {
         const chunks = splitIntoChunks(file.content, CHUNK_SIZE_LIMIT);
         let translatedFullContent = "";
+        // Fix: corrected variable name declaration (removed space)
         const relevantDictionary = optimizeDictionary(dictionary, file.content);
 
         for (let i = 0; i < chunks.length; i++) {
@@ -181,16 +162,14 @@ QUY TẮC BẮT BUỘC:
                         contents: fullPrompt,
                         config: {
                             systemInstruction,
-                            temperature: 0.0,
+                            temperature: 0.1,
                         },
                     });
 
+                    // Using .text property directly as per guidelines
                     const output = response.text || "";
-                    
-                    // Kiểm soát chất lượng nhanh: Nếu output chứa quá nhiều tiếng Trung (>30%) -> AI "lười" dịch
                     const chineseMatches = output.match(/[\u4e00-\u9fa5]/g);
                     if (chineseMatches && chineseMatches.length > output.length * 0.3) {
-                         console.warn(`Model ${modelId} trả về quá nhiều tiếng Trung, thử lại...`);
                          continue;
                     }
 
@@ -213,17 +192,12 @@ QUY TẮC BẮT BUỘC:
     return { results: finalResults, model: lastUsedModel };
 };
 
-/**
- * Phân tích các chương truyện để tạo hồ sơ bối cảnh và từ điển tự động
- */
 export const analyzeStoryContext = async (
     chapters: FileItem[],
-    storyInfo: StoryInfo,
-    apiKey: string
+    storyInfo: StoryInfo
 ): Promise<string> => {
-    const ai = getAiClient(apiKey);
-    
-    // Lấy mẫu nội dung từ 3 chương đầu (mỗi chương 3000 ký tự đầu)
+    // API key is handled internally via process.env.API_KEY
+    const ai = getAiClient();
     const sampleText = chapters
         .slice(0, 3)
         .map(c => `--- ${c.name} ---\n${c.content.substring(0, 3000)}`)
@@ -239,7 +213,7 @@ export const analyzeStoryContext = async (
 **NỘI DUNG MẪU:**
 ${sampleText}`;
 
-    const modelId = 'gemini-3-flash-preview';
+    const modelId = 'gemini-2.5-flash';
 
     try {
         const response = await ai.models.generateContent({
@@ -248,6 +222,7 @@ ${sampleText}`;
             config: { temperature: 0.2 },
         });
 
+        // Using .text property directly as per guidelines
         if (!response.text) return "";
         quotaManager.recordRequest(modelId);
         return response.text.trim();

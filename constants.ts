@@ -63,35 +63,33 @@ export const GLOSSARY_ANALYSIS_PROMPT = `**PROMPT: LẬP HỒ SƠ PHÂN TÍCH V�
 
 export const DEFAULT_PROMPT = PROMPT_PRESETS[0].content;
 
-// Merged Dictionary - Giữ nguyên phần dưới của bạn...
 export const DEFAULT_DICTIONARY = `
 # --- ĐẠI TỪ / XƯNG HÔ CƠ BẢN ---
 大家伙儿=mọi người/tất cả mọi người
-# ... (Phần còn lại của từ điển giữ nguyên để tiết kiệm không gian)
 `;
 
 export const MODEL_CONFIGS: ModelQuota[] = [
   {
-    id: 'gemini-3-pro-preview',
-    name: 'Gemini 3.0 Pro (Tốt nhất)',
-    rpmLimit: 2,
-    rpdLimit: 50,
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash (Nhanh & Thông minh)',
+    rpmLimit: 15,
+    rpdLimit: 1500,
     priority: 1,
     maxOutputTokens: 65536
   },
   {
-    id: 'gemini-3-flash-preview',
-    name: 'Gemini 3.0 Flash (Nhanh & Đủ ý)',
-    rpmLimit: 15,
-    rpdLimit: 100,
+    id: 'gemini-3-pro-preview',
+    name: 'Gemini 3.0 Pro (Phân tích sâu)',
+    rpmLimit: 2,
+    rpdLimit: 50,
     priority: 2,
     maxOutputTokens: 65536
   },
   {
-    id: 'gemini-flash-latest',
-    name: 'Gemini Flash (Dự phòng)',
+    id: 'gemini-3-flash-preview',
+    name: 'Gemini 3.0 Flash (Tốc độ)',
     rpmLimit: 15,
-    rpdLimit: 100,
+    rpdLimit: 1500,
     priority: 3,
     maxOutputTokens: 65536
   }
