@@ -6,19 +6,10 @@ import { StoryInfo, FileItem } from './utils/types';
 
 const CHUNK_SIZE_LIMIT = 3500; 
 
-/**
- * Khởi tạo client AI với phím bảo mật mới nhất.
- */
-const getAiClient = () => {
-  // Ưu tiên 1: Key do người dùng nhập thủ công trong Settings
-  const customKey = localStorage.getItem('CUSTOM_GEMINI_API_KEY');
-  // Ưu tiên 2: Key từ môi trường hệ thống (nếu có)
-  const apiKey = (customKey && customKey.trim() !== '') ? customKey.trim() : process.env.API_KEY;
-  
-  if (!apiKey) {
-    throw new Error("Chưa cấu hình API Key. Vui lòng mở 'Cài đặt' và dán Key từ Google AI Studio.");
+const getAiClient = (apiKey: string) => {
+  if (!apiKey || apiKey.length < 30) {
+    throw new Error("Gemini API Key không hợp lệ. Vui lòng kiểm tra lại.");
   }
-  
   return new GoogleGenAI({ apiKey });
 };
 
@@ -41,21 +32,30 @@ const optimizeDictionary = (dictionary: string, content: string): string => {
   return usedLines.join('\n');
 };
 
+/**
+ * Lọc rác thông minh đa lớp:
+ * 1. Lọc AI chatter (Vâng, đây là bản dịch...)
+ * 2. Lọc quảng cáo web (Regex patterns)
+ * 3. Lọc dòng rác kỹ thuật (Link, số chương lặp lại)
+ * 4. Kiểm soát mật độ tiếng Trung sót lại
+ */
 const cleanupTranslatedText = (text: string, originalChapterName: string): string => {
     if (!text) return "";
     
     let lines = text.split('\n').map(l => l.trim()).filter(l => l !== "");
     
+    // Mẫu AI chatter thường gặp
     const AI_INTRO_OUTRO = [
         /^vâng/i, /^đây là/i, /^bản dịch/i, /^tôi đã/i, /^dưới đây là/i, 
         /^chào/i, /^tất nhiên/i, /^chắc chắn/i, /^hy vọng/i, /^phần tiếp theo/i,
         /\[\[\[.*?\]\]\]/g, /###/g, /===/g, /---/g
     ];
 
+    // Mẫu rác quảng cáo & tech rác từ các web Trung (mạnh mẽ hơn)
     const JUNK_PATTERNS = [
         /đang đọc tại/i, /truyenfull/i, /metruyen/i, /sstruyen/i, /tangthuvien/i,
         /chúc bạn đọc truyện vui vẻ/i, /bản dịch thuộc về/i, /nguồn:/i,
-        /tác giả:/i, /nguồn:/i, /người dịch:/i, /biên tập:/i, /vui lòng không/i,
+        /tác giả:/i, /người dịch:/i, /biên tập:/i, /vui lòng không/i,
         /mọi người nhớ ủng hộ/i, /nhấn thích/i, /đánh giá/i, /bấm vào đây/i,
         /tải xuống/i, /69shuba/i, /piaotian/i, /uukanshu/i, /biquge/i, /69shu/i,
         /www\./i, /\.com/i, /\.net/i, /\.org/i, /\.vn/i, /https?:\/\//i,
@@ -64,16 +64,26 @@ const cleanupTranslatedText = (text: string, originalChapterName: string): strin
 
     lines = lines.filter((line, idx) => {
         const lower = line.toLowerCase();
+        
+        // 1. Loại bỏ AI Intro ở 2 dòng đầu hoặc 2 dòng cuối
         if ((idx < 2 || idx > lines.length - 3) && AI_INTRO_OUTRO.some(p => p.test(line))) return false;
+        
+        // 2. Lọc quảng cáo
         if (JUNK_PATTERNS.some(p => p.test(line))) return false;
+        
+        // 3. Lọc dòng quá ngắn chứa ký tự web rác
         if (line.length < 60 && (lower.includes('shuba') || lower.includes('69') || lower.includes('html'))) return false;
 
+        // 4. Kiểm tra tỷ lệ tiếng Trung (Nếu > 15% là chữ Hán -> chưa dịch xong)
         const chineseChars = line.match(/[\u4e00-\u9fa5]/g);
         if (chineseChars && chineseChars.length > line.length * 0.15) {
+            // Trừ khi dòng này cực ngắn và là tên riêng (nhưng thường tên riêng cũng nên dịch)
             if (line.length > 10) return false;
         }
 
+        // 5. Loại bỏ các dòng lặp lại tên chương (Raw) nếu AI lỡ để lại
         if (originalChapterName && lower.includes(originalChapterName.toLowerCase()) && line.length < originalChapterName.length + 10) {
+            // Nếu là dòng đầu tiên thì CÓ THỂ là tiêu đề đã dịch, nên ta kiểm tra xem nó còn tiếng Trung không
             if (idx === 0 && !/[\u4e00-\u9fa5]/.test(line)) return true;
             return false;
         }
@@ -95,7 +105,7 @@ const handleErrorQuota = (error: any, modelId: string) => {
 
 const selectModel = (allowedModelIds: string[]) => {
   const currentConfigs = quotaManager.getConfigs();
-  const priorityTier = ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-lite-latest'];
+  const priorityTier = ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-latest'];
   const available = currentConfigs
     .filter(c => allowedModelIds.includes(c.id) && quotaManager.isModelAvailable(c.id))
     .sort((a, b) => {
@@ -132,9 +142,10 @@ export const translateBatch = async (
     userPrompt: string,
     dictionary: string,
     globalContext: string,
-    allowedModelIds: string[]
+    allowedModelIds: string[],
+    apiKey: string
 ): Promise<{ results: Map<string, string>, model: string }> => {
-    const ai = getAiClient();
+    const ai = getAiClient(apiKey);
     const finalResults = new Map<string, string>();
     let lastUsedModel = "";
 
@@ -170,13 +181,16 @@ QUY TẮC BẮT BUỘC:
                         contents: fullPrompt,
                         config: {
                             systemInstruction,
-                            temperature: 0.1,
+                            temperature: 0.0,
                         },
                     });
 
                     const output = response.text || "";
+                    
+                    // Kiểm soát chất lượng nhanh: Nếu output chứa quá nhiều tiếng Trung (>30%) -> AI "lười" dịch
                     const chineseMatches = output.match(/[\u4e00-\u9fa5]/g);
                     if (chineseMatches && chineseMatches.length > output.length * 0.3) {
+                         console.warn(`Model ${modelId} trả về quá nhiều tiếng Trung, thử lại...`);
                          continue;
                     }
 
@@ -186,14 +200,10 @@ QUY TẮC BẮT BUỘC:
                     chunkSuccess = true;
                     break; 
                 } catch (error: any) {
-                    const errorMsg = (error.message || "").toLowerCase();
-                    if (errorMsg.includes("requested entity was not found") || errorMsg.includes("404")) {
-                        console.error("Lỗi API Key hoặc Model. Vui lòng kiểm tra lại Key.");
-                    }
                     handleErrorQuota(error, modelId);
                 }
             }
-            if (!chunkSuccess) throw new Error(`Không thể dịch chương ${file.name}. Vui lòng kiểm tra API Key trong mục Cài đặt.`);
+            if (!chunkSuccess) throw new Error(`Không thể dịch chương ${file.name} sau nhiều lần thử.`);
         }
         
         const finalCleaned = cleanupTranslatedText(translatedFullContent, file.name);
@@ -203,11 +213,17 @@ QUY TẮC BẮT BUỘC:
     return { results: finalResults, model: lastUsedModel };
 };
 
+/**
+ * Phân tích các chương truyện để tạo hồ sơ bối cảnh và từ điển tự động
+ */
 export const analyzeStoryContext = async (
     chapters: FileItem[],
-    storyInfo: StoryInfo
+    storyInfo: StoryInfo,
+    apiKey: string
 ): Promise<string> => {
-    const ai = getAiClient();
+    const ai = getAiClient(apiKey);
+    
+    // Lấy mẫu nội dung từ 3 chương đầu (mỗi chương 3000 ký tự đầu)
     const sampleText = chapters
         .slice(0, 3)
         .map(c => `--- ${c.name} ---\n${c.content.substring(0, 3000)}`)
@@ -223,7 +239,7 @@ export const analyzeStoryContext = async (
 **NỘI DUNG MẪU:**
 ${sampleText}`;
 
-    const modelId = 'gemini-2.5-flash';
+    const modelId = 'gemini-3-flash-preview';
 
     try {
         const response = await ai.models.generateContent({
