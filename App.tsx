@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { 
-  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud, Smartphone, Maximize2, Minimize2, MoreHorizontal, FileSearch, PlayCircle
+  FileText, Download, Trash2, AlertCircle, CheckCircle, Loader2, Settings, Zap, Sparkles, ChevronDown, RefreshCw, Languages, Plus, Search, Link2, Book, Brain, Type, Volume2, VolumeX, SkipBack, SkipForward, LogOut, Eye, EyeOff, Menu, ScrollText, Key, ExternalLink, Github, HelpCircle, AlertTriangle, X, PlusCircle, History, Hourglass, Info, Wand2, FileArchive, ArrowRight, Play, Pause, Square, Sliders, Coffee, Sun, Moon, FileOutput, Save, BookOpen, ToggleLeft, ToggleRight, Wand, UploadCloud, Smartphone, Maximize2, Minimize2, MoreHorizontal, FileSearch, PlayCircle, ShieldCheck
 } from 'lucide-react';
 import { FileItem, FileStatus, StoryProject, ReaderSettings } from './utils/types';
 import { DEFAULT_PROMPT, MODEL_CONFIGS, AVAILABLE_LANGUAGES, AVAILABLE_GENRES, AVAILABLE_PERSONALITIES, AVAILABLE_SETTINGS, AVAILABLE_FLOWS, DEFAULT_DICTIONARY } from './constants';
@@ -50,6 +50,7 @@ const App: React.FC = () => {
   const [showContextSetup, setShowContextSetup] = useState<boolean>(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState<boolean>(false);
   const [showTTSSettings, setShowTTSSettings] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
   
   const [linkInput, setLinkInput] = useState<string>("");
   const [isAutoCrawlEnabled, setIsAutoCrawlEnabled] = useState<boolean>(true);
@@ -58,9 +59,8 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState<string>("");
-  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
+  const [apiKeyInput, setApiKeyInput] = useState<string>(localStorage.getItem('CUSTOM_GEMINI_API_KEY') || localStorage.getItem('gemini_api_key') || '');
+  const [hasEffectiveKey, setHasEffectiveKey] = useState<boolean>(false);
 
   const [isWakeLockActive, setIsWakeLockActive] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
@@ -102,33 +102,29 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
+    const checkKey = () => {
+      const custom = localStorage.getItem('CUSTOM_GEMINI_API_KEY') || localStorage.getItem('gemini_api_key');
+      setHasEffectiveKey(!!(custom && custom.trim() !== '') || !!process.env.API_KEY);
+    };
+    checkKey();
+    const inv = setInterval(checkKey, 5000);
+    return () => clearInterval(inv);
+  }, []);
+
+  const saveApiKey = () => {
+    const trimmed = apiKeyInput.trim();
+    localStorage.setItem('CUSTOM_GEMINI_API_KEY', trimmed);
+    setApiKeyInput(trimmed);
+    addToast("Đã lưu API Key thành công!", "success");
+    setShowSettings(false);
+  };
+
+  useEffect(() => {
     const ua = navigator.userAgent;
     if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) setDeviceType('mobile');
     else if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Opera Mini/i.test(ua)) setDeviceType('mobile');
     else setDeviceType('desktop');
   }, []);
-
-  useEffect(() => {
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey && savedKey.length > 30) {
-      setApiKey(savedKey);
-      setApiKeyInput(savedKey);
-    } else {
-      setShowApiKeyModal(true);
-    }
-  }, []);
-
-  const handleSaveApiKey = () => {
-    const keyToSave = apiKeyInput.trim();
-    if (keyToSave.length < 30) {
-        addToast("API Key không hợp lệ.", "error");
-        return;
-    }
-    localStorage.setItem('gemini_api_key', keyToSave);
-    setApiKey(keyToSave);
-    setShowApiKeyModal(false);
-    addToast("Đã lưu API Key!", "success");
-  };
 
   const addToast = useCallback((message: any, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
     const id = generateId();
@@ -155,11 +151,6 @@ const App: React.FC = () => {
         if (!window.speechSynthesis) return;
         let voices = window.speechSynthesis.getVoices();
         let filtered = voices.filter(v => v.lang.startsWith('vi') || v.lang.startsWith('en'));
-        filtered.sort((a, b) => {
-            if (a.lang.startsWith('vi') && !b.lang.startsWith('vi')) return -1;
-            if (!a.lang.startsWith('vi') && b.lang.startsWith('vi')) return 1;
-            return a.name.localeCompare(b.name);
-        });
         setAvailableVoices(filtered);
     };
     updateVoices();
@@ -179,10 +170,10 @@ const App: React.FC = () => {
   useEffect(() => { if (currentProject) persistProject(currentProject); }, [currentProject?.lastModified]);
 
   const handleAIAnalyze = async () => {
-    if (!currentProject || !apiKey) return;
+    if (!currentProject) return;
     setIsAnalyzing(true);
     try {
-        const result = await analyzeStoryContext(currentProject.chapters, currentProject.info, apiKey);
+        const result = await analyzeStoryContext(currentProject.chapters, currentProject.info);
         updateProject(currentProject.id, { globalContext: result });
         addToast("Phân tích AI hoàn tất!", "success");
     } catch (e: any) {
@@ -259,7 +250,6 @@ const App: React.FC = () => {
         if (isProcessing) setProcessingQueue(prev => [...new Set([...prev, chapterId])]);
     } catch (e: any) { 
       addToast(e.message, "error");
-      // Nếu lỗi crawl khi đang xử lý tự động, hãy dừng auto-crawl để tránh treo loop
       if (isProcessing) setIsAutoCrawlEnabled(false);
     } finally {
         isFetchingLinksRef.current = false; setIsFetchingLinks(false); setLinkInput("");
@@ -304,33 +294,20 @@ const App: React.FC = () => {
     setIsProcessing(true);
   }, [currentProject, isAutoCrawlEnabled]);
 
-  const translateSingleChapter = useCallback((chapterId: string) => {
-    if (!currentProject) return;
-    setProcessingQueue(prev => [...new Set([...prev, chapterId])]);
-    setIsProcessing(true);
-    addToast("Đã thêm chương vào hàng đợi dịch", "success");
-  }, [currentProject]);
-
   const stopTranslation = useCallback(() => {
     setIsProcessing(false); 
     setProcessingQueue([]);
     addToast("Đã dừng tiến trình dịch", "info");
   }, []);
 
-  /**
-   * Worker xử lý dịch thuật với cơ chế chống treo
-   */
   useEffect(() => {
-    if (!isProcessing || !currentProjectId || !apiKey) return;
+    if (!isProcessing || !currentProjectId) return;
     
-    // Kiểm tra xem hàng đợi có trống không
     if (processingQueue.length === 0 && activeWorkers === 0) {
-        // Nếu bật auto-crawl và có URL tiếp theo, hãy thử crawl
         if (isAutoCrawlEnabled && currentProject?.lastCrawlUrl && !isFetchingLinksRef.current) {
             handleLinkCrawl(currentProject.lastCrawlUrl);
             return;
         } else if (!isFetchingLinksRef.current) {
-            // Thực sự không còn việc gì để làm -> Dừng loader
             setIsProcessing(false);
             return;
         }
@@ -343,47 +320,34 @@ const App: React.FC = () => {
         setProcessingQueue(prev => prev.slice(BATCH_FILE_LIMIT));
         setActiveWorkers(prev => prev + 1);
 
-        // Eager Crawl: Cào chương tiếp theo ngay khi bắt đầu dịch chương hiện tại để tiết kiệm thời gian
-        if (isAutoCrawlEnabled && currentProject?.lastCrawlUrl && !isFetchingLinksRef.current) {
-            handleLinkCrawl(currentProject.lastCrawlUrl);
-        }
-
         setProjects(prev => prev.map(p => p.id === currentProjectId ? {
-            ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.PROCESSING } : c)
+            ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.PROCESSING, errorMessage: undefined } : c)
         } : p));
 
         try {
             const targetProj = projects.find(p => p.id === currentProjectId);
             if (!targetProj) return;
             const prompt = replacePromptVariables(targetProj.promptTemplate, targetProj.info);
-            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)).map(c => ({ id: c.id, content: c.content, name: c.name })), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id), apiKey);
+            const { results, model } = await translateBatch(targetProj.chapters.filter(c => batchIds.includes(c.id)).map(c => ({ id: c.id, content: c.content, name: c.name })), prompt, targetProj.dictionary, targetProj.globalContext, MODEL_CONFIGS.map(m => m.id));
             
             setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, lastModified: Date.now(), chapters: p.chapters.map(c => {
                 if (batchIds.includes(c.id)) {
                     const translated = results.get(c.id);
                     if (translated) {
-                        const firstLine = translated.split('\n')[0].trim();
-                        let aiTranslatedName = c.name;
-                        if (firstLine.toLowerCase().includes('chương') && firstLine.length < 100) {
-                            aiTranslatedName = translateChapterTitle(firstLine);
-                        }
-                        return { ...c, name: aiTranslatedName, status: FileStatus.COMPLETED, translatedContent: translated, usedModel: model };
+                        return { ...c, status: FileStatus.COMPLETED, translatedContent: translated, usedModel: model };
                     }
-                    return { ...c, status: FileStatus.ERROR };
+                    return { ...c, status: FileStatus.ERROR, errorMessage: "Dữ liệu trả về không hợp lệ" };
                 }
                 return c;
             }) } : p));
         } catch (e: any) {
-            console.error("Batch error:", e);
-            setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR } : c) } : p));
-            addToast(`Lỗi dịch chương: ${e.message}`, "error");
+            setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, chapters: p.chapters.map(c => batchIds.includes(c.id) ? { ...c, status: FileStatus.ERROR, errorMessage: e.message } : c) } : p));
         } finally { 
-            // Giảm số lượng worker để nhường slot cho batch tiếp theo hoặc cho phép effect re-run
-            setTimeout(() => setActiveWorkers(prev => prev - 1), 500);
+            setTimeout(() => setActiveWorkers(prev => prev - 1), 1000); // Đợi 1s trước khi chạy batch tiếp theo
         }
     };
     processBatch();
-  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, apiKey, isAutoCrawlEnabled, currentProject?.lastCrawlUrl]);
+  }, [isProcessing, processingQueue, activeWorkers, currentProjectId, isAutoCrawlEnabled, currentProject?.lastCrawlUrl]);
 
   const sortedChapters = useMemo(() => {
     if (!currentProject) return [];
@@ -402,115 +366,32 @@ const App: React.FC = () => {
     if (!isReaderActiveRef.current || !viewingChapter?.translatedContent) { stopTTS(); return; }
     if (synthesisRef.current) synthesisRef.current.cancel();
 
-    const paragraphs = viewingChapter.translatedContent.split('\n').filter(p => p.trim().length > 0);
-    
-    // Nếu hết chương
-    if (startIndex >= paragraphs.length) {
-        const currentIndex = sortedChapters.findIndex(c => c.id === viewingFileId);
-        if (currentIndex < sortedChapters.length - 1) {
-            const nextChapter = sortedChapters[currentIndex + 1];
-            if (nextChapter.status === FileStatus.COMPLETED) {
-                // Đánh dấu đang chuyển chương để effect playTTS(0) hoạt động
-                isTransitioningTTSRef.current = true;
-                setViewingFileId(nextChapter.id); 
-                setActiveTTSIndex(-1); // Reset index trước khi load chương mới
-                return;
-            } else {
-              addToast("Chương tiếp theo chưa được dịch xong.", "info");
-            }
-        }
-        stopTTS();
-        return;
-    }
+    const paragraphs = viewingChapter.translatedContent.split('\n').filter(p => p.trim());
+    if (startIndex >= paragraphs.length) { stopTTS(); return; }
 
     setActiveTTSIndex(startIndex);
     setIsTTSPaused(false);
     setIsTTSPlaying(true);
 
-    const utterance = new SpeechSynthesisUtterance(paragraphs[startIndex].trim());
+    const utterance = new SpeechSynthesisUtterance(paragraphs[startIndex]);
     utterance.lang = 'vi-VN';
-    utterance.rate = readerSettings.ttsRate || 1.1;
-    utterance.pitch = readerSettings.ttsPitch || 1.0;
-    
-    if (readerSettings.ttsVoice && synthesisRef.current) {
-        const v = synthesisRef.current.getVoices().find(v => v.voiceURI === readerSettings.ttsVoice);
+    utterance.rate = readerSettings.ttsRate || 1.2;
+    if (readerSettings.ttsVoice) {
+        const v = synthesisRef.current?.getVoices().find(v => v.voiceURI === readerSettings.ttsVoice);
         if (v) utterance.voice = v;
     }
-
-    utterance.onend = () => { 
-        // Chỉ tiếp tục nếu không phải đang trong quá trình chuyển chương và không bị pause
-        if (isReaderActiveRef.current && !isTTSPaused && !isTransitioningTTSRef.current) { 
-            playTTS(startIndex + 1); 
-        }
-    };
-
-    utterance.onerror = (e) => { 
-      console.error("TTS Error:", e);
-      // Nếu gặp lỗi, cố gắng bỏ qua dòng này và tiếp tục
-      if (!isTTSPaused) setTimeout(() => playTTS(startIndex + 1), 500);
-    };
-
+    utterance.onend = () => { if (!isTTSPaused) playTTS(startIndex + 1); };
     synthesisRef.current?.speak(utterance);
-  }, [viewingChapter, readerSettings, viewingFileId, sortedChapters, stopTTS, isTTSPaused]);
-
-  // Effect để tự động phát khi chuyển chương thành công
-  useEffect(() => {
-    if (isReaderActiveRef.current && viewingFileId && isTTSPlaying && !isTTSPaused && isTransitioningTTSRef.current) {
-        if (viewingChapter?.translatedContent) {
-            isTransitioningTTSRef.current = false;
-            // Một chút delay để UI kịp render và đảm bảo synthesis đã cancel sạch chương trước
-            const timer = setTimeout(() => playTTS(0), 500);
-            return () => clearTimeout(timer);
-        }
-    }
-  }, [viewingFileId, viewingChapter?.translatedContent, isTTSPlaying, isTTSPaused, playTTS]);
-
-  const handleParagraphClick = (idx: number) => {
-    isTransitioningTTSRef.current = false;
-    playTTS(idx);
-  };
+  }, [viewingChapter, readerSettings, stopTTS, isTTSPaused]);
 
   const toggleTTSPause = () => {
-    if (synthesisRef.current?.speaking) {
-        if (synthesisRef.current.paused) { 
-            synthesisRef.current.resume(); setIsTTSPaused(false); setIsTTSPlaying(true); 
-        } else { 
-            synthesisRef.current.pause(); setIsTTSPaused(true); 
-        }
-    } else {
-        playTTS(activeTTSIndex === -1 ? 0 : activeTTSIndex);
-    }
+    if (synthesisRef.current?.paused) { synthesisRef.current.resume(); setIsTTSPaused(false); }
+    else if (synthesisRef.current?.speaking) { synthesisRef.current.pause(); setIsTTSPaused(true); }
+    else { playTTS(activeTTSIndex === -1 ? 0 : activeTTSIndex); }
   };
 
-  const openReader = (id: string) => { 
-    isReaderActiveRef.current = true; 
-    setViewingFileId(id); 
-    setActiveTTSIndex(-1); 
-    setIsTTSPaused(false); 
-    setIsReaderUIHidden(false); 
-  };
-  
-  const closeReader = () => { 
-    isReaderActiveRef.current = false; 
-    stopTTS(); 
-    setViewingFileId(null); 
-  };
-
-  useEffect(() => { 
-      if (activeTTSIndex !== -1 && activeLineRef.current) {
-          activeLineRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
-      }
-  }, [activeTTSIndex]);
-
-  useEffect(() => {
-    if (!viewingFileId) return;
-    let timeout: any;
-    // Tự động ẩn UI sau 3s nếu đang nghe
-    if (!isTTSPaused && activeTTSIndex !== -1) {
-        timeout = setTimeout(() => setIsReaderUIHidden(true), 3000);
-    }
-    return () => clearTimeout(timeout);
-  }, [isTTSPaused, activeTTSIndex, viewingFileId]);
+  const openReader = (id: string) => { setViewingFileId(id); setIsReaderUIHidden(false); isReaderActiveRef.current = true; };
+  const closeReader = () => { isReaderActiveRef.current = false; stopTTS(); setViewingFileId(null); };
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
@@ -535,7 +416,13 @@ const App: React.FC = () => {
             ))}
           </div>
           <div className="p-6 border-t border-slate-100 space-y-3">
-            <button onClick={() => setShowApiKeyModal(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-600 hover:bg-amber-50 hover:text-amber-700 font-semibold transition-all"><Key className="w-5 h-5" />API Key Settings</button>
+            <button 
+              onClick={() => setShowSettings(true)} 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${hasEffectiveKey ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-600 border border-rose-100'}`}
+            >
+              {hasEffectiveKey ? <ShieldCheck className="w-5 h-5 text-emerald-600" /> : <Key className="w-5 h-5 text-rose-500" />}
+              {hasEffectiveKey ? "API Key: Sẵn Sàng" : "Chưa Thiết Lập Key"}
+            </button>
             <button onClick={toggleWakeLock} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-semibold ${isWakeLockActive ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}>{isWakeLockActive ? <Sun className="w-5 h-5 animate-pulse" /> : <Moon className="w-5 h-5" />}{isWakeLockActive ? "Đang giữ sáng" : "Giữ sáng màn hình"}</button>
           </div>
         </div>
@@ -547,7 +434,7 @@ const App: React.FC = () => {
           {currentProject && (
             <div className="flex items-center gap-3">
                 <button onClick={() => setShowContextSetup(true)} className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl hover:bg-indigo-100 transition-all flex items-center gap-2 font-bold text-sm shadow-sm"><Brain className="w-5 h-5" /><span className="hidden sm:inline">Bối cảnh</span></button>
-                <button onClick={() => isProcessing ? stopTranslation() : startTranslation(false)} disabled={!apiKey} className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-3 px-6 rounded-2xl text-sm shadow-xl active:scale-95 transition-all disabled:opacity-50`}>{isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{isProcessing ? "Dừng" : "Dịch Ngay"}</button>
+                <button onClick={() => isProcessing ? stopTranslation() : startTranslation(false)} className={`flex items-center gap-2 ${isProcessing ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-bold py-3 px-6 rounded-2xl text-sm shadow-xl active:scale-95 transition-all disabled:opacity-50`}>{isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{isProcessing ? "Dừng" : "Dịch Ngay"}</button>
             </div>
           )}
         </header>
@@ -569,20 +456,21 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {sortedChapters.map((ch) => {
                         const { label, color } = getStatusLabel(ch.status);
-                        const isIdleOrError = ch.status === FileStatus.IDLE || ch.status === FileStatus.ERROR;
                         return (
                             <div key={ch.id} onClick={() => ch.status === FileStatus.COMPLETED && openReader(ch.id)} className={`bg-white p-6 rounded-[2rem] border border-slate-100 hover:shadow-2xl transition-all relative overflow-hidden group cursor-pointer ${ch.status === FileStatus.COMPLETED ? 'hover:scale-[1.02]' : ''}`}>
                                 <div className="absolute top-0 right-0 p-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    {isIdleOrError && (
-                                        <button onClick={(e) => { e.stopPropagation(); translateSingleChapter(ch.id); }} title="Dịch chương này" className="flex items-center gap-2 px-3 py-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-600 hover:text-white transition-all font-bold text-xs"><PlayCircle className="w-4 h-4" /> Dịch</button>
-                                    )}
                                     <button onClick={(e) => { e.stopPropagation(); setViewingRawId(ch.id); }} title="Xem bản gốc" className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-600 hover:text-white transition-all"><ScrollText className="w-4 h-4" /></button>
                                     <button onClick={(e) => { e.stopPropagation(); updateProject(currentProject.id, { chapters: currentProject.chapters.filter(c => c.id !== ch.id) }); }} className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-all"><Trash2 className="w-4 h-4" /></button>
                                 </div>
                                 <h4 className="font-bold text-slate-800 truncate mb-4 text-lg" title={String(ch.name)}>{String(ch.name)}</h4>
-                                <div className="flex items-center justify-between mt-auto">
-                                    <span className={`text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full ${color}`}>{label}</span>
-                                    {ch.status === FileStatus.COMPLETED && <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl"><Eye className="w-5 h-5" /></div>}
+                                <div className="flex flex-col gap-2">
+                                    <div className="flex items-center justify-between">
+                                        <span className={`text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full ${color}`}>{label}</span>
+                                        {ch.status === FileStatus.COMPLETED && <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl"><Eye className="w-5 h-5" /></div>}
+                                    </div>
+                                    {ch.status === FileStatus.ERROR && ch.errorMessage && (
+                                        <p className="text-[10px] text-rose-500 font-bold leading-tight">{ch.errorMessage}</p>
+                                    )}
                                 </div>
                             </div>
                         );
@@ -593,125 +481,79 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {viewingChapter && (
-          <div className={`fixed inset-0 z-[100] flex flex-col transition-all duration-700 ${readerSettings.bgColor} ${readerSettings.isImmersiveMode ? 'p-0' : ''}`}>
-              <div className={`fixed top-0 inset-x-0 z-[110] transition-all duration-500 flex items-center justify-between px-6 h-16 glass-panel border-b ${isReaderUIHidden ? '-translate-y-full opacity-0' : 'translate-y-0 opacity-100'}`}>
-                <div className="flex items-center gap-4"><button onClick={closeReader} className="p-2 hover:bg-black/10 rounded-2xl transition-all"><ArrowRight className="w-6 h-6 rotate-180" /></button><div><h3 className="font-bold text-sm truncate max-w-[200px] sm:max-w-md">{String(viewingChapter.name)}</h3><p className="text-[10px] font-bold opacity-50 uppercase tracking-widest">{currentProject?.info.title}</p></div></div>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => { setViewingRawId(viewingChapter.id); closeReader(); }} title="Xem bản gốc" className="p-3 hover:bg-black/10 rounded-2xl transition-all"><FileSearch className="w-5 h-5" /></button>
-                    <button onClick={() => setReaderSettings(prev => ({...prev, isImmersiveMode: !prev.isImmersiveMode}))} className="p-3 hover:bg-black/10 rounded-2xl transition-all"><Maximize2 className="w-5 h-5" /></button>
-                    <button onClick={() => setShowTTSSettings(!showTTSSettings)} className={`p-3 rounded-2xl transition-all ${showTTSSettings ? 'bg-indigo-600 text-white' : 'hover:bg-black/10'}`}><Sliders className="w-5 h-5" /></button>
-                </div>
-              </div>
-              {showTTSSettings && (
-                  <div className={`fixed z-[120] bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 transition-all duration-500 ${deviceType === 'mobile' ? 'bottom-0 inset-x-0 rounded-b-none' : 'bottom-24 right-8 w-96'}`}>
-                      <div className="flex items-center justify-between mb-8"><h4 className="font-bold text-slate-800 text-lg">Cấu hình giọng đọc</h4><button onClick={() => setShowTTSSettings(false)} className="p-2 hover:bg-slate-100 rounded-full transition-all text-slate-400"><X className="w-5 h-5" /></button></div>
-                      <div className="space-y-6 text-slate-800">
-                          <div className="space-y-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest px-1">Giọng nói</label><select value={readerSettings.ttsVoice} onChange={(e) => setReaderSettings(prev => ({...prev, ttsVoice: e.target.value}))} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-bold appearance-none transition-all shadow-inner"><option value="">Mặc định</option>{availableVoices.map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name}</option>)}</select></div>
-                          <div className="grid grid-cols-2 gap-4">
-                              <div className="space-y-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest px-1">Tốc độ {readerSettings.ttsRate}x</label><input type="range" min="0.5" max="3.0" step="0.1" value={readerSettings.ttsRate} onChange={(e) => setReaderSettings(prev => ({ ...prev, ttsRate: parseFloat(e.target.value) }))} className="w-full accent-indigo-600 h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer" /></div>
-                              <div className="space-y-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest px-1">Tông {readerSettings.ttsPitch}x</label><input type="range" min="0.5" max="2.0" step="0.1" value={readerSettings.ttsPitch} onChange={(e) => setReaderSettings(prev => ({ ...prev, ttsPitch: parseFloat(e.target.value) }))} className="w-full accent-indigo-600 h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer" /></div>
-                          </div>
-                      </div>
-                  </div>
-              )}
-              <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pt-24 pb-32" ref={readerScrollRef} onClick={() => setIsReaderUIHidden(!isReaderUIHidden)}>
-                  <div className="max-w-3xl mx-auto"><h1 className="text-3xl font-display font-bold mb-20 text-center opacity-90 leading-tight">{String(viewingChapter.name)}</h1><div className={`space-y-10 leading-[1.8] ${readerSettings.fontFamily}`} style={{ fontSize: `${readerSettings.fontSize}px` }}>{viewingChapter.translatedContent?.split('\n').filter(l => l.trim().length > 0).map((line, idx) => (<div key={idx} ref={activeTTSIndex === idx ? activeLineRef : null} onClick={(e) => { e.stopPropagation(); handleParagraphClick(idx); }} className={`p-4 rounded-3xl transition-all duration-700 cursor-pointer border-2 ${activeTTSIndex === idx ? 'bg-indigo-500/10 border-indigo-500/30' : 'border-transparent hover:bg-black/5'}`}><p className={`${activeTTSIndex === idx ? 'font-medium' : 'opacity-90'}`}>{String(line.trim())}</p></div>))}</div></div>
-              </div>
-              <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[110] transition-all duration-500 ${isReaderUIHidden && !isTTSPaused ? 'translate-y-24 opacity-0 scale-90' : 'translate-y-0 opacity-100 scale-100'}`}>
-                <div className="flex items-center gap-2 p-2 bg-white/10 backdrop-blur-2xl rounded-[2.5rem] border border-white/20 shadow-2xl">
-                    <div className="flex items-center gap-1 bg-black/5 rounded-[2.2rem] p-1">{BG_COLORS.map(c => <button key={c.code} onClick={(e) => { e.stopPropagation(); setReaderSettings(prev => ({ ...prev, bgColor: c.code })); }} className={`w-8 h-8 rounded-full border-2 transition-all ${c.code} ${readerSettings.bgColor === c.code ? 'scale-110 shadow-lg border-indigo-500' : 'border-transparent opacity-60'}`} />)}</div>
-                    <div className="h-8 w-px bg-black/10 mx-1"></div>
-                    <div className="flex items-center gap-2 pr-2">
-                        <button onClick={(e) => { e.stopPropagation(); stopTTS(); }} className="p-4 hover:bg-black/10 rounded-full transition-all text-current"><Square className="w-5 h-5 fill-current" /></button>
-                        <button onClick={(e) => { e.stopPropagation(); toggleTTSPause(); }} className="p-5 bg-indigo-600 text-white rounded-full shadow-xl hover:scale-105 active:scale-95 transition-all">{isTTSPaused || activeTTSIndex === -1 ? <Play className="w-7 h-7 fill-white translate-x-0.5" /> : <Pause className="w-7 h-7 fill-white" />}</button>
-                        <button onClick={(e) => { e.stopPropagation(); playTTS(activeTTSIndex + 1); }} className="p-4 hover:bg-black/10 rounded-full transition-all text-current"><SkipForward className="w-5 h-5 fill-current" /></button>
-                    </div>
-                </div>
-              </div>
-          </div>
-      )}
-
-      {/* API Key Modal with Guide */}
-      {showApiKeyModal && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 sm:p-10 text-center shadow-2xl overflow-y-auto max-h-[90vh] custom-scrollbar">
-            <div className="w-20 h-20 bg-amber-100 text-amber-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
-              <Key className="w-10 h-10" />
+      {showSettings && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+          <div className="bg-white rounded-[3rem] w-full max-w-xl p-12 shadow-premium space-y-8 animate-in zoom-in-95 duration-300 relative">
+            <h3 className="font-bold text-2xl font-display text-slate-800">Cài đặt API Key</h3>
+            <div className="space-y-4">
+              <label className="text-sm font-bold text-slate-700 px-1">Nhập Gemini API Key</label>
+              <input 
+                type="password" 
+                placeholder="Dán AIza... Key của bạn tại đây" 
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                className="w-full p-6 rounded-[1.5rem] bg-slate-50 border-2 border-slate-100 focus:border-indigo-500 outline-none font-mono text-sm transition-all shadow-inner"
+              />
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Key được lưu cục bộ trên thiết bị của bạn.</p>
             </div>
-            <h2 className="text-2xl font-bold text-slate-800 mb-2 font-display">Gemini API Key</h2>
-            <p className="text-sm text-slate-500 mb-6 font-medium leading-relaxed px-4">Để sử dụng trí tuệ nhân tạo Gemini dịch thuật, bạn cần nạp một mã API Key cá nhân.</p>
-            
-            <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 mb-8 text-left">
-              <h4 className="flex items-center gap-2 font-bold text-indigo-700 text-sm mb-3">
-                <HelpCircle className="w-4 h-4" /> Cách lấy API Key miễn phí:
-              </h4>
-              <ol className="text-xs text-slate-600 space-y-2.5 font-medium leading-relaxed list-decimal list-inside">
-                <li>Truy cập vào <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-600 underline font-bold inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-3 h-3" /></a></li>
-                <li>Nhấn nút <span className="text-indigo-700 font-bold">"Create API key"</span></li>
-                <li>Chọn project (hoặc tạo mới) và sao chép mã (bắt đầu bằng <span className="bg-white px-1 border border-indigo-200 rounded">AIza...</span>)</li>
-                <li>Dán mã đó vào ô bên dưới.</li>
-              </ol>
+            <div className="flex gap-4">
+              <button onClick={() => setShowSettings(false)} className="flex-1 font-bold text-slate-400">Hủy</button>
+              <button onClick={saveApiKey} className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-3">
+                <Save className="w-5 h-5" /> Lưu Cấu Hình
+              </button>
             </div>
-
-            <input 
-              type="password" 
-              placeholder="Dán API Key (AIza...)" 
-              value={apiKeyInput} 
-              onChange={(e) => setApiKeyInput(e.target.value)} 
-              className="w-full text-center p-5 rounded-3xl bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-medium mb-4 transition-all shadow-inner" 
-            />
-            
-            <button 
-              onClick={handleSaveApiKey} 
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-5 rounded-3xl shadow-xl active:scale-95 transition-all text-lg"
-            >
-              Lưu & Bắt đầu
-            </button>
-            
-            <p className="mt-6 text-[10px] text-slate-400 font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-              <Zap className="w-3 h-3 text-amber-500 fill-amber-500" /> Powered by Google Gemini AI
-            </p>
           </div>
         </div>
       )}
-      
-      {/* New Project Modal */}
-      {showNewProjectModal && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-xl p-10 shadow-2xl space-y-6 text-slate-800"><h3 className="font-bold text-2xl font-display">Tạo truyện mới</h3><input type="text" placeholder="Tên truyện" value={newProjectInfo.title} onChange={(e) => setNewProjectInfo({...newProjectInfo, title: e.target.value})} className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-bold" /><div className="flex gap-4 pt-4"><button onClick={() => setShowNewProjectModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={createNewProject} className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl active:scale-95 transition-all">Xác nhận</button></div></div></div>)}
 
-      {/* Link Modal */}
-      {showLinkModal && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-xl p-10 shadow-2xl space-y-8 text-slate-800"><h3 className="font-bold text-2xl font-display">Cào Link Truyện</h3><input type="text" placeholder="Link chương đầu" value={linkInput} onChange={(e) => setLinkInput(e.target.value)} className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-medium" /><div className="flex items-center justify-between bg-indigo-50/50 p-4 rounded-[1.5rem] border border-indigo-100"><div><p className="text-sm font-bold text-slate-800">Auto-Crawl Eager</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Cào chương tiếp theo ngay khi bắt đầu dịch</p></div><button onClick={() => setIsAutoCrawlEnabled(!isAutoCrawlEnabled)} className="transition-all active:scale-90">{isAutoCrawlEnabled ? <ToggleRight className="w-10 h-10 text-indigo-600" /> : <ToggleLeft className="w-10 h-10 text-slate-300" />}</button></div><div className="flex gap-4 pt-4"><button onClick={() => setShowLinkModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={() => handleLinkCrawl()} className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl active:scale-95 transition-all">Bắt đầu nạp</button></div></div></div>)}
-      
-      {/* Context Modal */}
-      {showContextSetup && currentProject && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden text-slate-800"><div className="px-10 py-8 border-b flex items-center justify-between"><h3 className="font-bold text-2xl font-display">Bối cảnh & Từ điển</h3><button onClick={() => setShowContextSetup(false)} className="p-2.5 hover:bg-slate-100 rounded-2xl"><X className="w-7 h-7 text-slate-400" /></button></div><div className="flex-1 overflow-y-auto p-10 grid grid-cols-2 gap-8"><div className="space-y-2"><label className="text-xs font-extrabold text-slate-400 uppercase tracking-widest px-2">Từ điển (Gốc=Dịch)</label><textarea value={currentProject.dictionary} onChange={e => updateProject(currentProject.id, { dictionary: e.target.value })} className="w-full h-full min-h-[400px] p-6 rounded-[2rem] bg-slate-50 border-2 border-transparent focus:border-indigo-400 outline-none font-mono text-sm leading-relaxed" /></div><div className="space-y-2"><label className="text-xs font-extrabold text-slate-400 uppercase tracking-widest px-2">Bối cảnh / Cốt truyện</label><textarea value={currentProject.globalContext} onChange={e => updateProject(currentProject.id, { globalContext: e.target.value })} className="w-full h-full min-h-[400px] p-6 rounded-[2rem] bg-slate-50 border-2 border-transparent focus:border-indigo-400 outline-none text-sm leading-relaxed" /></div></div><div className="p-8 bg-slate-50 border-t flex justify-end gap-4"><button onClick={handleAIAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold text-sm hover:bg-amber-100">{isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand className="w-4 h-4" />}AI Phân Tích</button><button onClick={() => setShowContextSetup(false)} className="bg-indigo-600 text-white font-bold py-4 px-12 rounded-2xl shadow-xl">Lưu cấu hình</button></div></div></div>)}
-
-      {/* Raw View Modal */}
-      {viewingRawId && viewingRawFile && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
-            <div className="bg-white rounded-[3rem] w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-                <div className="px-10 py-8 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
-                    <div>
-                        <h3 className="font-bold text-2xl font-display text-slate-800">Nội dung gốc (Raw)</h3>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{viewingRawFile.name} • {viewingRawFile.content.length} ký tự</p>
-                    </div>
-                    <button onClick={() => setViewingRawId(null)} className="p-3 hover:bg-rose-50 text-slate-400 hover:text-rose-500 rounded-2xl transition-all"><X className="w-7 h-7" /></button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-10 custom-scrollbar bg-slate-50/50">
-                    <div className="max-w-2xl mx-auto">
-                        <pre className="whitespace-pre-wrap font-sans text-lg text-slate-700 leading-relaxed tracking-tight">{viewingRawFile.content}</pre>
-                    </div>
-                </div>
-                <div className="p-8 bg-white border-t border-slate-100 flex justify-end gap-4">
-                    <button onClick={() => { setViewingRawId(null); if(viewingRawFile.status === FileStatus.COMPLETED) openReader(viewingRawFile.id); }} className="px-8 py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-xl active:scale-95 transition-all flex items-center gap-2">
-                        {viewingRawFile.status === FileStatus.COMPLETED ? <><Eye className="w-5 h-5" /> Mở bản dịch</> : <><Sparkles className="w-5 h-5" /> Chờ dịch</>}
+      {viewingChapter && (
+          <div className={`fixed inset-0 z-[100] flex flex-col transition-all duration-700 ${readerSettings.bgColor}`}>
+              <div className={`fixed top-0 inset-x-0 z-[110] transition-all flex items-center justify-between px-6 h-16 glass-panel border-b ${isReaderUIHidden ? '-translate-y-full' : 'translate-y-0'}`}>
+                <button onClick={closeReader} className="p-2 hover:bg-black/10 rounded-2xl"><ArrowRight className="w-6 h-6 rotate-180" /></button>
+                <h3 className="font-bold text-sm truncate max-w-xs">{String(viewingChapter.name)}</h3>
+                <button onClick={() => setShowTTSSettings(!showTTSSettings)} className="p-3 hover:bg-black/10 rounded-2xl"><Sliders className="w-5 h-5" /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pt-24 pb-32" onClick={() => setIsReaderUIHidden(!isReaderUIHidden)}>
+                  <div className="max-w-3xl mx-auto space-y-8">
+                    {viewingChapter.translatedContent?.split('\n').filter(p => p.trim()).map((line, idx) => (
+                        <p key={idx} className={`p-4 rounded-2xl transition-all border-2 border-transparent hover:bg-black/5 text-lg leading-relaxed ${activeTTSIndex === idx ? 'bg-indigo-500/10 border-indigo-500/30 font-medium' : ''}`}>
+                            {line.trim()}
+                        </p>
+                    ))}
+                  </div>
+              </div>
+              <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[110] transition-all ${isReaderUIHidden ? 'translate-y-24 opacity-0' : 'translate-y-0 opacity-100'}`}>
+                <div className="flex items-center gap-4 p-3 bg-white/20 backdrop-blur-2xl rounded-[2.5rem] border border-white/20 shadow-2xl">
+                    <button onClick={toggleTTSPause} className="p-6 bg-indigo-600 text-white rounded-full shadow-xl">
+                        {synthesisRef.current?.paused || !synthesisRef.current?.speaking ? <Play className="w-8 h-8 fill-white" /> : <Pause className="w-8 h-8 fill-white" />}
                     </button>
                 </div>
+              </div>
+          </div>
+      )}
+      
+      {showNewProjectModal && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-xl p-10 shadow-2xl space-y-6"><h3 className="font-bold text-2xl">Tạo truyện mới</h3><input type="text" placeholder="Tên truyện" value={newProjectInfo.title} onChange={(e) => setNewProjectInfo({...newProjectInfo, title: e.target.value})} className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-bold" /><div className="flex gap-4 pt-4"><button onClick={() => setShowNewProjectModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={createNewProject} className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl">Xác nhận</button></div></div></div>)}
+
+      {showLinkModal && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-xl p-10 shadow-2xl space-y-8"><h3 className="font-bold text-2xl">Cào Link Truyện</h3><input type="text" placeholder="Link chương đầu" value={linkInput} onChange={(e) => setLinkInput(e.target.value)} className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-2 border-transparent focus:border-indigo-500 outline-none font-medium" /><div className="flex gap-4 pt-4"><button onClick={() => setShowLinkModal(false)} className="flex-1 font-bold text-slate-400">Hủy</button><button onClick={() => handleLinkCrawl()} className="flex-[2] bg-indigo-600 text-white font-bold py-5 rounded-[1.5rem] shadow-xl">Bắt đầu nạp</button></div></div></div>)}
+      
+      {showContextSetup && currentProject && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className="bg-white rounded-[3rem] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden"><div className="px-10 py-8 border-b flex items-center justify-between"><h3 className="font-bold text-2xl">Bối cảnh & Từ điển</h3><button onClick={() => setShowContextSetup(false)} className="p-2.5 hover:bg-slate-100 rounded-2xl"><X className="w-7 h-7 text-slate-400" /></button></div><div className="flex-1 overflow-y-auto p-10 grid grid-cols-2 gap-8"><div className="space-y-2"><label className="text-xs font-extrabold text-slate-400 uppercase tracking-widest px-2">Từ điển (Gốc=Dịch)</label><textarea value={currentProject.dictionary} onChange={e => updateProject(currentProject.id, { dictionary: e.target.value })} className="w-full h-full min-h-[400px] p-6 rounded-[2rem] bg-slate-50 border-2 border-transparent focus:border-indigo-400 outline-none font-mono text-sm" /></div><div className="space-y-2"><label className="text-xs font-extrabold text-slate-400 uppercase tracking-widest px-2">Bối cảnh</label><textarea value={currentProject.globalContext} onChange={e => updateProject(currentProject.id, { globalContext: e.target.value })} className="w-full h-full min-h-[400px] p-6 rounded-[2rem] bg-slate-50 border-2 border-transparent focus:border-indigo-400 outline-none text-sm" /></div></div><div className="p-8 bg-slate-50 border-t flex justify-end gap-4"><button onClick={handleAIAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold text-sm hover:bg-amber-100">{isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand className="w-4 h-4" />}AI Phân Tích</button><button onClick={() => setShowContextSetup(false)} className="bg-indigo-600 text-white font-bold py-4 px-12 rounded-2xl shadow-xl">Lưu cấu hình</button></div></div></div>)}
+
+      {viewingRawId && viewingRawFile && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+            <div className="bg-white rounded-[3rem] w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+                <div className="px-10 py-8 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+                    <h3 className="font-bold text-2xl">Nội dung gốc</h3>
+                    <button onClick={() => setViewingRawId(null)} className="p-3 hover:bg-rose-50 text-slate-400 hover:text-rose-500 rounded-2xl"><X className="w-7 h-7" /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-10 custom-scrollbar bg-slate-50/50">
+                    <pre className="whitespace-pre-wrap font-sans text-lg text-slate-700 leading-relaxed">{viewingRawFile.content}</pre>
+                </div>
             </div>
         </div>
       )}
 
-      <div className="fixed bottom-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">{toasts.map(t => (<div key={t.id} className={`pointer-events-auto flex items-center gap-4 px-8 py-5 rounded-[2rem] shadow-soft border-2 animate-in slide-in-from-right duration-500 min-w-[320px] backdrop-blur-md ${t.type === 'success' ? 'bg-emerald-50/90 text-emerald-800 border-emerald-100' : t.type === 'error' ? 'bg-rose-50/90 text-rose-800 border-rose-100' : 'bg-white/90 text-slate-800 border-slate-100'}`}><div className={`p-2 rounded-xl ${t.type === 'success' ? 'bg-emerald-500' : t.type === 'error' ? 'bg-rose-500' : 'bg-indigo-500'} text-white`}>{t.type === 'success' ? <CheckCircle className="w-5 h-5" /> : t.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <Info className="w-5 h-5" />}</div><span className="font-bold text-sm leading-snug">{t.message}</span></div>))}</div>
-      {!viewingFileId && (isFetchingLinks || isProcessing) && (<div className="fixed bottom-10 left-10 z-[150] glass-panel p-5 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-left duration-500 flex items-center gap-5"><div className="relative"><div className="w-12 h-12 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin" /><div className="absolute inset-0 flex items-center justify-center"><Zap className="w-4 h-4 text-amber-500 fill-amber-500" /></div></div><div className="pr-4"><p className="font-bold text-sm text-slate-800 uppercase tracking-widest">{isProcessing ? 'Dịch tự động' : 'Cào dữ liệu'}</p><p className="text-[10px] font-bold text-indigo-500 opacity-70">SYSTEM ACTIVE • 2.5 FLASH</p></div></div>)}
+      <div className="fixed bottom-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">{toasts.map(t => (<div key={t.id} className={`pointer-events-auto flex items-center gap-4 px-8 py-5 rounded-[2rem] shadow-soft border-2 animate-in slide-in-from-right duration-500 min-w-[320px] backdrop-blur-md ${t.type === 'success' ? 'bg-emerald-50/90 text-emerald-800 border-emerald-100' : t.type === 'error' ? 'bg-rose-50/90 text-rose-800 border-rose-100' : 'bg-white/90 text-slate-800 border-slate-100'}`}><div className={`p-2 rounded-xl ${t.type === 'success' ? 'bg-emerald-500' : t.type === 'error' ? 'bg-rose-500' : 'bg-indigo-500'} text-white`}>{t.type === 'success' ? <CheckCircle className="w-5 h-5" /> : t.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <Info className="w-5 h-5" />}</div><span className="font-bold text-sm">{t.message}</span></div>))}</div>
+      {!viewingFileId && (isFetchingLinks || isProcessing) && (<div className="fixed bottom-10 left-10 z-[150] glass-panel p-5 rounded-[2.5rem] shadow-2xl flex items-center gap-5"><div className="w-12 h-12 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin" /><div className="pr-4"><p className="font-bold text-sm text-slate-800 uppercase tracking-widest">{isProcessing ? 'Dịch tự động' : 'Cào dữ liệu'}</p><p className="text-[10px] font-bold text-indigo-500 opacity-70">SYSTEM ACTIVE • 3.0 FLASH</p></div></div>)}
     </div>
   );
 };
