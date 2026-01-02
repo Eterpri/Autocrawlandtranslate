@@ -10,6 +10,7 @@ export enum FileStatus {
 export interface FileItem {
   id: string;
   name: string;
+  orderIndex: number; // Thứ tự nạp/cào để giữ đúng trình tự chương
   content: string;
   translatedContent: string | null;
   status: FileStatus;
@@ -37,9 +38,11 @@ export interface ReaderSettings {
   fontFamily: string;
   ttsVoice?: string;
   ttsRate?: number;
+  ttsPitch?: number;
   showOriginal?: boolean;
   autoScrollSpeed?: number;
   isAutoScrollActive?: boolean;
+  isImmersiveMode?: boolean;
 }
 
 export interface StoryProject {
